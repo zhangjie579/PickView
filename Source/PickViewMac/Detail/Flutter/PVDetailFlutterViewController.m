@@ -167,6 +167,15 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
                          detail:detail
                              to:widgetSections];
 
+    NSArray<PVFlutterInspectorFieldModel *> *creationLocationFields =
+        [self creationLocationFieldsFromDetail:detail widgetType:presentation.widgetType];
+    if (creationLocationFields.count) {
+        [widgetSections addObject:[self section:@"creationLocation"
+                                       subtitle:@""
+                                         accent:[self widgetAccent]
+                                         fields:creationLocationFields]];
+    }
+
     for (PVFlutterLayoutGroup *group in detail.layoutGroups ?: @[]) {
         NSMutableArray<PVFlutterInspectorFieldModel *> *fields = [NSMutableArray array];
         for (PVFlutterDetailField *field in group.fields) {
@@ -221,6 +230,13 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
                                      accent:[self debugAccent]
                                      fields:runtimeFields]];
 
+    if (creationLocationFields.count) {
+        [debugSections addObject:[self section:@"creationLocation"
+                                       subtitle:@"定义在哪个文件信息"
+                                         accent:[self debugAccent]
+                                         fields:creationLocationFields]];
+    }
+    
     NSMutableArray *rawFields = [NSMutableArray array];
     if (detail.rawJSON.length) {
         [rawFields addObject:[self JSONField:@"Inspector node" value:detail.rawJSON]];
@@ -461,6 +477,37 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     NSData *data = [string dataUsingEncoding:NSUTF8StringEncoding];
     id value = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
++ (NSArray<PVFlutterInspectorFieldModel *> *)creationLocationFieldsFromDetail:(PVFlutterNodeDetail *)detail
+                                                                    widgetType:(NSString *)widgetType {
+    NSDictionary *root = [self JSONObjectFromString:detail.rawJSON];
+    NSDictionary *creationLocationDict = [root[@"creationLocation"] isKindOfClass:NSDictionary.class]
+        ? root[@"creationLocation"] : nil;
+    if (!creationLocationDict.count) return @[];
+
+    if (creationLocationDict && [creationLocationDict[@"name"] isEqualToString:widgetType]) {
+        NSMutableArray *creationLocations = [NSMutableArray array];
+        
+        [creationLocationDict enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull key, id  _Nonnull obj, BOOL * _Nonnull stop) {
+            [creationLocations addObject:[self infoField:key value:[NSString stringWithFormat:@"%@", obj]]];
+            
+            if ([key isEqualToString:@"file"]) {
+                [creationLocations addObject:[self infoField:@"文件名" value:[obj lastPathComponent]]];
+            }
+        }];
+        
+        return creationLocations;
+    }
+    
+    return @[];
+}
+
++ (NSString *)stringValueForJSONValue:(id)value {
+    if (!value || value == NSNull.null) return @"";
+    if ([value isKindOfClass:NSString.class]) return value;
+    if ([value isKindOfClass:NSNumber.class]) return [value stringValue];
+    return [NSString stringWithFormat:@"%@", value];
 }
 
 + (NSArray<PVFlutterInspectorFieldModel *> *)diagnosticFieldsFromObjects:(NSArray *)objects
