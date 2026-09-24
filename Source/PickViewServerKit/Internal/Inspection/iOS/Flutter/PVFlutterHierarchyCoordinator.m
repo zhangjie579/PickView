@@ -13,10 +13,37 @@
 #import "PVObject.h"
 #import "PVStaticAsyncUpdateTask.h"
 
-static BOOL PVShouldCaptureCollapsedFlutterSubtree(
+/// Whether anything inside this subtree can produce pixels.
+///
+/// A collapsed row is the *only* row that draws for its whole subtree: while an
+/// ancestor stays collapsed every descendant is hidden in the preview. So a
+/// collapsed row must fall back to a real subtree screenshot as soon as
+/// anything below it paints — including component widgets (ZPButton,
+/// BlocBuilder, Builder, ...) that borrow a descendant's RenderObject. Skipping
+/// those here is what used to leave a collapsed composite widget blank.
+static BOOL PVFlutterSubtreeHasPaintableContent(KKFIInspectorElement *element) {
+    if (!element.hasFrame) return NO;
+    if (element.captureEligible || element.nativeDecoration != nil) return YES;
+    if (element.children.count == 0) return NO;
+    for (KKFIInspectorElement *child in element.children) {
+        if (PVFlutterSubtreeHasPaintableContent(child)) return YES;
+    }
+    // Descendants without a resolved frame still paint inside the parent's
+    // subtree image, so keep the capture when the parent itself has a frame.
+    // This is what lets a layout-only or proxy wrapper show its children.
+    return YES;
+}
+
+/// Returns the render object identity reported by the Flutter inspector for
+/// this element, or nil when the node has no render object at all.
+static NSString *PVFlutterRenderObjectIDForElement(
     KKFIInspectorElement *element) {
-    return [element.renderStrategy isEqualToString:@"layoutOnly"] &&
-        element.children.count > 0;
+    NSDictionary *renderObject =
+        [element.rawJSON isKindOfClass:NSDictionary.class]
+            ? element.rawJSON[@"renderObject"] : nil;
+    if (![renderObject isKindOfClass:NSDictionary.class]) return nil;
+    NSString *valueID = renderObject[@"valueId"];
+    return [valueID isKindOfClass:NSString.class] ? valueID : nil;
 }
 
 @interface PVFlutterPageSnapshot : NSObject
@@ -25,16 +52,117 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
 @property(nonatomic, strong) KKFIHierarchySnapshot *snapshot;
 @property(nonatomic, copy) NSString *pageIdentifier;
 @property(nonatomic, copy) NSArray<PVDisplayItem *> *rootItems;
+/// Component widgets such as BlocBuilder or Builder do not own pixels: the
+/// Flutter inspector reports a descendant's RenderObject for them, so a
+/// screenshot would only duplicate that descendant's content. This table marks
+/// such elements so the preview keeps them transparent.
+@property(nonatomic, strong) NSMapTable<KKFIInspectorElement *, NSValue *> *proxyElementsByElement;
 @end
 
 @implementation PVFlutterPageSnapshot
+
+- (BOOL)isProxyElement:(KKFIInspectorElement *)element {
+    return element != nil &&
+        [self.proxyElementsByElement objectForKey:element] != nil;
+}
+
 @end
+
+/// Whether an expanded node may draw anything in the preview. A Flutter
+/// Inspector screenshot always contains every descendant pixel, so an expanded
+/// node only draws when those pixels can be attributed to itself:
+///  - a leaf has no visible descendants, so the whole image is its own;
+///  - a rebuildable decoration reproduces color, border, radius, shadow, and
+///    gradient from diagnostics without flattening any child.
+/// Everything else stays transparent while expanded. A `selfPaint` node without
+/// a rebuildable decoration must not fall back to its subtree image: a
+/// page-sized `ColoredBox` would otherwise paint the whole screen again on top
+/// of every descendant that already draws itself. Layout-only nodes and
+/// `paintEffect` wrappers (ClipRRect, Opacity, Transform, BackdropFilter,
+/// FittedBox, ...) are transparent while expanded too; clips, fades, and blurs
+/// remain visible through the collapsed group screenshot, where nothing is
+/// layered twice.
+static BOOL PVFlutterExpandedElementOwnsContent(
+    KKFIInspectorElement *element, NSDictionary *decoration) {
+    return element.children.count == 0 || decoration != nil;
+}
+
+/// Reads one component out of a Flutter diagnostics description, for example
+/// `red:` out of `Color(alpha: 1.0000, red: 1.0000, ...)`.
+static NSNumber *PVFlutterColorComponentFromDescription(NSString *description,
+                                                        NSString *component) {
+    if (description.length == 0) return nil;
+    NSString *pattern =
+        [NSString stringWithFormat:@"\\b%@\\s*:\\s*([0-9]*\\.?[0-9]+)", component];
+    NSRegularExpression *expression =
+        [NSRegularExpression regularExpressionWithPattern:pattern
+                                                  options:0
+                                                    error:nil];
+    NSTextCheckingResult *match =
+        [expression firstMatchInString:description
+                               options:0
+                                 range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges < 2) return nil;
+    NSString *value = [description substringWithRange:[match rangeAtIndex:1]];
+    return @(value.doubleValue * 255.0);
+}
+
+/// Parses a Flutter diagnostics color description into the dictionary shape
+/// used by the native decoration renderer. Flutter prints either the component
+/// form `Color(alpha: 1.0000, red: 1.0000, green: 1.0000, blue: 1.0000, ...)`
+/// or the legacy hex form `Color(0xfff5f5f5)`.
+static NSDictionary *PVFlutterColorDictionaryFromDescription(
+    NSString *description) {
+    if (![description isKindOfClass:NSString.class]) return nil;
+    NSNumber *alpha = PVFlutterColorComponentFromDescription(description, @"alpha");
+    NSNumber *red = PVFlutterColorComponentFromDescription(description, @"red");
+    NSNumber *green = PVFlutterColorComponentFromDescription(description, @"green");
+    NSNumber *blue = PVFlutterColorComponentFromDescription(description, @"blue");
+    if (alpha && red && green && blue) {
+        return @{
+            @"red" : red, @"green" : green, @"blue" : blue, @"alpha" : alpha,
+        };
+    }
+    static NSRegularExpression *hexExpression;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        hexExpression = [NSRegularExpression
+            regularExpressionWithPattern:@"0x([0-9a-fA-F]{6,8})"
+                                 options:0
+                                   error:nil];
+    });
+    NSTextCheckingResult *match =
+        [hexExpression firstMatchInString:description
+                                  options:0
+                                    range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges < 2) return nil;
+    NSString *hex = [description substringWithRange:[match rangeAtIndex:1]];
+    if (hex.length != 6 && hex.length != 8) return nil;
+    unsigned long long value = 0;
+    NSScanner *scanner = [NSScanner scannerWithString:hex];
+    if (![scanner scanHexLongLong:&value]) return nil;
+    CGFloat parsedAlpha = 255;
+    if (hex.length == 8) {
+        parsedAlpha = (value >> 24) & 0xFF;
+    }
+    return @{
+        @"red" : @((value >> 16) & 0xFF),
+        @"green" : @((value >> 8) & 0xFF),
+        @"blue" : @(value & 0xFF),
+        @"alpha" : @(parsedAlpha),
+    };
+}
 
 @interface PVFlutterNodeRecord : NSObject
 @property(nonatomic, weak) PVFlutterPageSnapshot *page;
 @property(nonatomic, strong) KKFIInspectorElement *element;
 @property(nonatomic, copy) NSString *displayItemID;
 @property(nonatomic, strong) PVFlutterNodeDetail *detail;
+/// Decoration rebuilt from diagnostics that the tree builder could not parse,
+/// for example the plain `color` of a `_RenderColoredBox`. It lets a node such
+/// as a full-page background draw only its own color instead of flattening the
+/// entire screen into its preview image.
+@property(nonatomic, strong, nullable) NSDictionary *resolvedDecoration;
 @end
 
 @implementation PVFlutterNodeRecord
@@ -209,6 +337,13 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
     page.pageIdentifier = [NSString stringWithFormat:@"%@:%p",
         NSStringFromClass(((UIViewController *)viewController).class),
         viewController];
+    page.proxyElementsByElement = [NSMapTable weakToStrongObjectsMapTable];
+    if (snapshot.rootElement != nil) {
+        NSMutableSet<NSString *> *descendantRenderObjectIDs = [NSMutableSet set];
+        [self detectProxyElements:snapshot.rootElement
+                intoProxyElements:page.proxyElementsByElement
+      descendantRenderObjectIDs:descendantRenderObjectIDs];
+    }
     page.rootItems = snapshot.rootElement == nil
         ? @[]
         : @[[self displayItemForElement:snapshot.rootElement page:page]];
@@ -216,6 +351,31 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
     [self.pagesByHostLayer setObject:page forKey:hostView.layer];
     NSLog(@"PV_FLUTTER_HIERARCHY_PREPARED hostView=%@ snapshot=%@ rootItems=%@",
           hostView, snapshot.snapshotID, @(page.rootItems.count));
+}
+
+// Marks every element whose render object actually belongs to one of its
+// descendants. Component widgets (BlocBuilder, Builder, Consumer, Container,
+// ...) own no pixels; `Element.renderObject` in Flutter walks down to the
+// first descendant RenderObject, so their reported render object matches the
+// descendant's. Without this check the tree builder classifies them as
+// self-painting and the preview ends up duplicating the descendant's pixels.
+- (void)detectProxyElements:(KKFIInspectorElement *)element
+          intoProxyElements:(NSMapTable<KKFIInspectorElement *, NSValue *> *)proxyElements
+  descendantRenderObjectIDs:(NSMutableSet<NSString *> *)descendantRenderObjectIDs {
+    for (KKFIInspectorElement *child in element.children) {
+        NSMutableSet<NSString *> *childRenderObjectIDs = [NSMutableSet set];
+        [self detectProxyElements:child
+                intoProxyElements:proxyElements
+      descendantRenderObjectIDs:childRenderObjectIDs];
+        [descendantRenderObjectIDs unionSet:childRenderObjectIDs];
+    }
+    NSString *renderObjectID = PVFlutterRenderObjectIDForElement(element);
+    if (renderObjectID.length == 0) return;
+    if ([descendantRenderObjectIDs containsObject:renderObjectID]) {
+        [proxyElements setObject:@YES forKey:element];
+    } else {
+        [descendantRenderObjectIDs addObject:renderObjectID];
+    }
 }
 
 - (PVDisplayItem *)displayItemForElement:(KKFIInspectorElement *)element
@@ -254,9 +414,12 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
     item.bounds = (CGRect){CGPointZero, element.frame.size};
     item.alpha = 1;
     item.noPreview = !element.hasFrame;
+    // A proxy wrapper owns no pixels of its own, but while it is collapsed it
+    // is still the only row drawn for its subtree, so it needs the subtree
+    // image. The proxy rule only suppresses its *own* layer, which is applied
+    // in captureForTask: when the item is expanded.
     item.shouldCaptureImage = element.hasFrame &&
-        (element.captureEligible || element.nativeDecoration != nil ||
-         PVShouldCaptureCollapsedFlutterSubtree(element));
+        PVFlutterSubtreeHasPaintableContent(element);
     item.attributesGroupList = @[];
     item.customAttrGroupList = @[];
 
@@ -353,6 +516,85 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
     }
     detail.layoutGroups = layoutGroups.copy;
     return detail;
+}
+
+// The tree builder only parses a decoration when the diagnostics were already
+// present, which misses plain cases such as `_RenderColoredBox.color`. The
+// properties fetched during the detail pass carry that information, so rebuild
+// a conservative decoration here: a solid background and an optional uniform
+// corner radius. Anything richer is left to the collapsed screenshot.
+- (NSDictionary *)decorationFromDiagnosticProperties:(NSArray *)properties {
+    NSDictionary *color = [self diagnosticColorInProperties:properties];
+    if (color == nil) return nil;
+    NSMutableDictionary *decoration = [@{
+        @"kind" : @"solidColor",
+        @"shape" : @"rectangle",
+        @"backgroundColor" : color,
+    } mutableCopy];
+    NSNumber *radius = [self uniformCornerRadiusInProperties:properties];
+    if (radius != nil) {
+        decoration[@"cornerRadius"] = radius;
+    }
+    return decoration.copy;
+}
+
+- (NSDictionary *)diagnosticColorInProperties:(NSArray *)properties {
+    for (id value in properties ?: @[]) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *property = value;
+        NSString *name = [property[@"name"] isKindOfClass:NSString.class]
+            ? property[@"name"] : @"";
+        static NSSet<NSString *> *colorNames;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            colorNames = [NSSet setWithArray:@[
+                @"color", @"bg", @"backgroundColor", @"fillColor", @"decoration",
+            ]];
+        });
+        if ([colorNames containsObject:name]) {
+            NSDictionary *color = PVFlutterColorDictionaryFromDescription(
+                [property[@"description"] isKindOfClass:NSString.class]
+                    ? property[@"description"] : nil);
+            if (color) return color;
+        }
+        NSArray *children = [property[@"properties"] isKindOfClass:NSArray.class]
+            ? property[@"properties"] : nil;
+        NSDictionary *nested = [self diagnosticColorInProperties:children];
+        if (nested) return nested;
+    }
+    return nil;
+}
+
+- (NSNumber *)uniformCornerRadiusInProperties:(NSArray *)properties {
+    for (id value in properties ?: @[]) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *property = value;
+        NSString *name = [property[@"name"] isKindOfClass:NSString.class]
+            ? property[@"name"] : @"";
+        NSString *description =
+            [property[@"description"] isKindOfClass:NSString.class]
+                ? property[@"description"] : nil;
+        if ([name isEqualToString:@"borderRadius"] && description.length) {
+            NSRegularExpression *expression = [NSRegularExpression
+                regularExpressionWithPattern:@"([0-9]+\\.?[0-9]*)"
+                                     options:0
+                                       error:nil];
+            NSTextCheckingResult *match =
+                [expression firstMatchInString:description
+                                       options:0
+                                         range:NSMakeRange(0, description.length)];
+            if (match.numberOfRanges >= 2) {
+                NSString *number =
+                    [description substringWithRange:[match rangeAtIndex:1]];
+                return @(number.doubleValue);
+            }
+        }
+        NSArray *children = [property[@"properties"] isKindOfClass:NSArray.class]
+            ? property[@"properties"] : nil;
+        NSNumber *nested = [self uniformCornerRadiusInProperties:children];
+        if (nested) return nested;
+    }
+    return nil;
 }
 
 - (void)appendJSONSection:(NSString *)identifier
@@ -460,6 +702,41 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
             detail.flutterDetail = [self detailByAddingDiagnostics:properties
                                                            toDetail:detail.flutterDetail];
             record.detail = detail.flutterDetail;
+            if (record.resolvedDecoration == nil) {
+                // The Inspector returns either a property array or a payload
+                // dictionary wrapping one, exactly like -detailByAddingDiagnostics:.
+                NSArray *diagnosticProperties = @[];
+                if ([properties isKindOfClass:NSArray.class]) {
+                    diagnosticProperties = (NSArray *)properties;
+                } else if ([properties isKindOfClass:NSDictionary.class]) {
+                    NSDictionary *payload = (NSDictionary *)properties;
+                    NSArray *wrapped = payload[@"properties"];
+                    if ([wrapped isKindOfClass:NSArray.class]) {
+                        diagnosticProperties = wrapped;
+                    }
+                }
+                record.resolvedDecoration =
+                    [self decorationFromDiagnosticProperties:diagnosticProperties];
+                NSMutableArray<NSString *> *names = [NSMutableArray array];
+                for (id value in diagnosticProperties) {
+                    NSString *name =
+                        [value isKindOfClass:NSDictionary.class] ? value[@"name"] : nil;
+                    NSString *description =
+                        [value isKindOfClass:NSDictionary.class] ? value[@"description"] : nil;
+                    if ([name isKindOfClass:NSString.class]) {
+                        [names addObject:[NSString stringWithFormat:@"%@=%@",
+                                          name,
+                                          [description isKindOfClass:NSString.class]
+                                              ? description : @""]];
+                    }
+                }
+                NSLog(@"PV_FLUTTER_DECORATION widget=%@ renderObject=%@ count=%@ "
+                      @"resolved=%d names=%@",
+                      record.element.widgetType, record.element.renderObjectType,
+                      @(diagnosticProperties.count),
+                      record.resolvedDecoration != nil,
+                      [names componentsJoinedByString:@", "]);
+            }
         }
         capture();
     }];
@@ -507,36 +784,79 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
     return detail;
 }
 
+// Debug aid: prints why a Flutter row does or does not receive preview pixels.
+- (void)logPreviewDecision:(NSString *)decision
+                      task:(PVStaticAsyncUpdateTask *)task
+                    record:(PVFlutterNodeRecord *)record {
+//    if (!decision.length) return;
+//    KKFIInspectorElement *element = record.element;
+//    NSLog(@"PV_FLUTTER_PREVIEW widget=%@ renderObject=%@ paintRole=%@ strategy=%@ "
+//          @"children=%@ hasFrame=%d proxy=%d decoration=%d resolved=%d frame=%@ task=%@ -> %@",
+//          element.widgetType, element.renderObjectType, element.paintRole,
+//          element.renderStrategy, @(element.children.count), element.hasFrame,
+//          [record.page isProxyElement:element], element.nativeDecoration != nil,
+//          record.resolvedDecoration != nil,
+//          NSStringFromCGRect(element.frame),
+//          task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot ? @"solo"
+//              : (task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot
+//                     ? @"group" : @"none"),
+//          decision);
+}
+
 - (void)captureForTask:(PVStaticAsyncUpdateTask *)task
                  record:(PVFlutterNodeRecord *)record
                  detail:(PVDisplayItemDetail *)detail
         lowImageQuality:(BOOL)lowImageQuality
              completion:(dispatch_block_t)completion {
     KKFIInspectorElement *element = record.element;
+    /// solo == 已展开，只画自己这一层；group == 折叠，要画出整棵子树
+    BOOL isSolo = (task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot);
     if (task.taskType == PVStaticAsyncUpdateTaskTypeNoScreenshot) {
         completion();
         return;
     }
     if (!element.hasFrame) {
+        [self logPreviewDecision:@"skipNoFrame" task:task record:record];
         completion();
         return;
     }
-    BOOL atomicSubtree =
-        [element.renderStrategy isEqualToString:@"atomicSubtreeScreenshot"];
-    BOOL collapsedLayoutSubtree =
-        task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot &&
-        PVShouldCaptureCollapsedFlutterSubtree(element);
-    if (task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot &&
-        element.children.count > 0 && !atomicSubtree) {
+    if (isSolo && [record.page isProxyElement:element]) {
+        // BlocBuilder / Builder / ZPButton style wrappers borrow a descendant's
+        // render object, so both the screenshot and the parsed decoration really
+        // belong to that descendant. While expanded, the owner row is visible and
+        // already draws them, so the wrapper itself draws nothing at all — not
+        // even a rebuilt decoration, since here the decoration was parsed from
+        // the borrowed render object rather than from the wrapper's own widget.
+        // While collapsed the rule is the opposite: every descendant is hidden,
+        // so the wrapper is the only row that can show the subtree (see below).
+        [self logPreviewDecision:@"skipProxy" task:task record:record];
+        completion();
+        return;
+    }
+    NSDictionary *decoration =
+        element.nativeDecoration ?: record.resolvedDecoration;
+    if (isSolo && !PVFlutterExpandedElementOwnsContent(element, decoration)) {
+        // Expanded: descendants already draw their own content, so an ancestor
+        // must not flatten them into another full subtree image and stack the
+        // same pixels on top of each other.
+        [self logPreviewDecision:@"skipExpandedParent" task:task record:record];
+        completion();
+        return;
+    }
+    if (isSolo && element.children.count > 0) {
         // An Inspector screenshot always contains the complete render subtree.
-        // For an ordinary expanded parent, only keep a reconstructable
-        // decoration and let visible children provide their own screenshots.
-        // A parent whose own pixels cannot be reconstructed remains atomic and
-        // falls through to a complete subtree capture instead.
-        CGFloat displayScale = record.page.hostView.traitCollection.displayScale;
-        UIImage *image = [self decorationImageForElement:element
-                                         lowImageQuality:lowImageQuality
-                                             displayScale:displayScale];
+        // For an expanded parent, only keep a reconstructed decoration and let
+        // visible children provide their own screenshots. A page-sized
+        // ColoredBox shows exactly this: its subtree image would paint the
+        // whole screen a second time.
+        CGFloat displayScale = MAX(record.page.hostView.traitCollection.displayScale, 1);
+        UIImage *image = [self decorationImageForDecoration:decoration
+                                                     size:element.frame.size
+                                          lowImageQuality:lowImageQuality
+                                              displayScale:displayScale];
+        [self logPreviewDecision:image ? @"expandedDecoration" : @"expandedDecorationNil"
+                            task:task
+                          record:record];
         if (image) {
             NSData *data = UIImagePNGRepresentation(image);
             detail.soloImageData = data;
@@ -545,11 +865,24 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
         completion();
         return;
     }
-    if (!element.captureEligible && element.nativeDecoration == nil &&
-        !collapsedLayoutSubtree) {
+    if (isSolo) {
+        // 已展开的叶子节点：只画自己这一层，没有可绘制内容就保持空白
+        if (!element.captureEligible && decoration == nil) {
+            [self logPreviewDecision:@"skipNotEligible" task:task record:record];
+            completion();
+            return;
+        }
+    } else if (!PVFlutterSubtreeHasPaintableContent(element)) {
+        // 折叠状态：整棵子树（含所有 child node）都由这一行负责绘制；子树里
+        // 确实没有任何可绘制内容时才保持空白。
+        [self logPreviewDecision:@"skipSubtreeEmpty" task:task record:record];
         completion();
         return;
     }
+    [self logPreviewDecision:task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot
+                                 ? @"captureSolo" : @"captureGroup"
+                        task:task
+                      record:record];
 
     CGFloat displayScale = MAX(record.page.hostView.traitCollection.displayScale, 1);
     // PickView displays these images on a Retina canvas and can further scale
@@ -571,6 +904,12 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
                 detail.groupImageData = result.pngData;
                 detail.groupScreenshot = result.image;
             }
+            NSLog(@"PV_FLUTTER_SCREENSHOT_OK widget=%@ renderObject=%@ task=%@ "
+                  @"image=%@ bytes=%@",
+                  element.widgetType, element.renderObjectType,
+                  task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot
+                      ? @"solo" : @"group",
+                  NSStringFromCGSize(result.image.size), @(result.pngData.length));
         } else {
             NSLog(@"PV_FLUTTER_SCREENSHOT_FAILED objectID=%@ widget=%@ strategy=%@ error=%@",
                   element.reference.objectID, element.widgetType,
@@ -583,8 +922,16 @@ static BOOL PVShouldCaptureCollapsedFlutterSubtree(
 - (UIImage *)decorationImageForElement:(KKFIInspectorElement *)element
                        lowImageQuality:(BOOL)lowImageQuality
                            displayScale:(CGFloat)displayScale {
-    NSDictionary *decoration = element.nativeDecoration;
-    CGSize size = element.frame.size;
+    return [self decorationImageForDecoration:element.nativeDecoration
+                                         size:element.frame.size
+                              lowImageQuality:lowImageQuality
+                                  displayScale:displayScale];
+}
+
+- (UIImage *)decorationImageForDecoration:(NSDictionary *)decoration
+                                     size:(CGSize)size
+                          lowImageQuality:(BOOL)lowImageQuality
+                              displayScale:(CGFloat)displayScale {
     if (!decoration || size.width <= 0 || size.height <= 0) return nil;
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
     format.opaque = NO;

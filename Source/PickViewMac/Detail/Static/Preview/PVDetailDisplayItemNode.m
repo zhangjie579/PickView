@@ -176,7 +176,9 @@
     
     PVImage *appropriateScreenshot = self.displayItem.appropriateScreenshot;
     NSAssert(MAX(appropriateScreenshot.representations.firstObject.pixelsWide, appropriateScreenshot.representations.firstObject.pixelsHigh) <= PVNodeImageMaxLengthInPx , @"image is too large");
-    self.contentPlane.firstMaterial.diffuse.contents = appropriateScreenshot;
+    /// 不能把 contents 设置成 nil，否则 SceneKit 会按默认材质画出一整块白色，
+    /// 让那些本该透明的图层（例如不自己绘制像素的 Flutter 包装层）看起来像是有内容
+    self.contentPlane.firstMaterial.diffuse.contents = appropriateScreenshot ? : [NSColor clearColor];
     
     BOOL tooLargeToFetchScreenshot = !appropriateScreenshot && self.displayItem.doNotFetchScreenshotReason == PVDoNotFetchScreenshotForTooLarge;
     
