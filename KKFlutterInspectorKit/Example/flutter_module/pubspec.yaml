@@ -1,0 +1,17 @@
+name: flutter_module
+description: Flutter page used by the KKFlutterInspectorKit example.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  module:
+    androidX: true
+    androidPackage: com.kris.flutter_module
+    iosBundleIdentifier: com.kris.flutterModule
