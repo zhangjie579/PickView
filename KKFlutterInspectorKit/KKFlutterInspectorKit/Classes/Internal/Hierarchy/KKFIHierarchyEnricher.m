@@ -259,11 +259,18 @@
     static NSSet<NSString *> *offsetBridgeRootTypes;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        // A TabBar needs the same bridge as AppBar and the Material buttons:
+        // every tab sits behind a chain of framework owned widgets
+        // (Semantics, CustomPaint, _TabStyle, _TabLabelBar, Expanded,
+        // MergeSemantics, Padding, Stack, Center, KeyedSubtree). The summary
+        // tree drops all of them and promotes the tab onto the TabBar, so the
+        // tab only reports its offset inside the innermost wrapper and every
+        // tab collapses onto the same origin.
         offsetBridgeRootTypes = [NSSet setWithArray:@[
             @"AppBar", @"CheckboxListTile", @"CupertinoButton",
             @"ElevatedButton", @"FilledButton", @"FloatingActionButton",
             @"IconButton", @"OutlinedButton", @"SwitchListTile",
-            @"TextButton", @"TextField",
+            @"TabBar", @"TextButton", @"TextField",
         ]];
     });
     BOOL isOffsetBridgeRoot =
@@ -408,7 +415,7 @@
         [[widgetType componentsSeparatedByString:@"<"] firstObject];
     NSSet<NSString *> *nestedScrollViews = [NSSet setWithArray:@[
         @"ListView", @"GridView", @"PageView", @"SingleChildScrollView",
-        @"CustomScrollView", @"NestedScrollView", @"TabBarView",
+        @"CustomScrollView", @"NestedScrollView", @"TabBar", @"TabBarView",
     ]];
     if ([nestedScrollViews containsObject:baseWidgetType]) {
         return;
@@ -462,9 +469,13 @@
                : nil);
     NSString *baseWidgetType =
         [[widgetType componentsSeparatedByString:@"<"] firstObject];
+    // A scrollable TabBar owns a SingleChildScrollView of its own, so an outer
+    // pass has to stop here exactly like it stops at a TabBarView: otherwise it
+    // resolves the tabs against the outer viewport while their parent row is
+    // the TabBar itself, which stacks them all on the same origin again.
     NSSet<NSString *> *nestedBoxScrollViews = [NSSet setWithArray:@[
         @"ListView", @"GridView", @"PageView", @"SingleChildScrollView",
-        @"CustomScrollView", @"NestedScrollView", @"TabBarView",
+        @"CustomScrollView", @"NestedScrollView", @"TabBar", @"TabBarView",
     ]];
     if ([nestedBoxScrollViews containsObject:baseWidgetType]) {
         return;
