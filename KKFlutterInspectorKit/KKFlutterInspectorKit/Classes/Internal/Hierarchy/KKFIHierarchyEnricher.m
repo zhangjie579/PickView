@@ -12,6 +12,17 @@
 #import "../Connection/KKFIVMServiceClient.h"
 #import "../Inspector/KKFIInspectorJSON.h"
 
+/// Flip to YES to trace every offset the sliver walk produces. One line per
+/// placed target with all four components, so a misplaced item can be
+/// attributed to a single term (base / paintOffset / layoutOffset /
+/// scrollOffset) instead of guessed at.
+static BOOL const KKFISliverOffsetTraceEnabled = NO;
+
+static NSString *KKFIPointDescription(CGPoint point) {
+    return [NSString stringWithFormat:@"(%@, %@)",
+            @(round(point.x * 10) / 10), @(round(point.y * 10) / 10)];
+}
+
 @implementation KKFIHierarchyEnricher
 
 - (void)enrichLayoutPayload:(NSDictionary *)layoutPayload
@@ -502,17 +513,31 @@
 
     NSMutableDictionary<NSString *, NSValue *> *result =
         [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *provisionalObjectIDs = [NSMutableSet set];
     [self collectCustomScrollResolvedOffsetsInDetailsNode:payload
                                            targetObjectIDs:targetObjectIDs
                                             axisDirection:nil
                                               scrollOffset:0
                                         sliverPaintOffset:CGPointZero
-                                            hasPaintOffset:NO
                                                baseOffset:CGPointZero
                                              isScrollRoot:YES
                                           insideViewport:NO
                                       seenRenderObjectIDs:[NSSet set]
+                                     provisionalObjectIDs:provisionalObjectIDs
                                                    result:result];
+    // Diagnostic only: a scrolled list whose scroll term is missing lands one
+    // scroll distance away from the viewport, so surface the Scrollable offset
+    // whenever the walk did not place every target.
+    BOOL foundViewportOffset = NO;
+    CGFloat viewportOffset = [self listViewScrollOffsetFromValue:payload
+                                                            found:&foundViewportOffset];
+    if (result.count < targetObjectIDs.count ||
+        (foundViewportOffset && fabs(viewportOffset) > 0.5)) {
+        NSLog(@"[KKFlutterInspectorKit] sliver pass: %@/%@ targets placed, "
+              @"Scrollable offset=%@",
+              @(result.count), @(targetObjectIDs.count),
+              foundViewportOffset ? @(viewportOffset) : @"n/a");
+    }
     return result.copy;
 }
 
@@ -523,9 +548,9 @@
 /// `sliverPaintOffset` accumulates the paintOffset of every sliver from that
 /// viewport down to the current one: a sliver reports its origin against the
 /// visible top left corner of the viewport, and a box child of a sliver adds
-/// its own `layoutOffset` on top of it. A box child also anchors a new
-/// coordinate space, which is exactly how the inner viewport of a
-/// `NestedScrollView` body behaves.
+/// its own `layoutOffset - scrollOffset` on top of it. A box child also
+/// anchors a new coordinate space, which is exactly how the inner viewport of
+/// a `NestedScrollView` body behaves.
 ///
 /// Widgets without a RenderObject of their own report the first descendant's,
 /// so a proxy chain repeats one RenderObject at every level. Each RenderObject
@@ -536,16 +561,15 @@
                                           axisDirection:(NSString *)axisDirection
                                             scrollOffset:(CGFloat)scrollOffset
                                       sliverPaintOffset:(CGPoint)sliverPaintOffset
-                                          hasPaintOffset:(BOOL)hasPaintOffset
                                              baseOffset:(CGPoint)baseOffset
                                            isScrollRoot:(BOOL)isScrollRoot
                                         insideViewport:(BOOL)insideViewport
                                     seenRenderObjectIDs:(NSSet<NSString *> *)seenRenderObjectIDs
+                                   provisionalObjectIDs:(NSMutableSet<NSString *> *)provisionalObjectIDs
                                                  result:(NSMutableDictionary<NSString *, NSValue *> *)result {
     NSString *nextAxisDirection = axisDirection;
     CGFloat nextScrollOffset = scrollOffset;
     CGPoint nextPaintOffset = sliverPaintOffset;
-    BOOL nextHasPaintOffset = hasPaintOffset;
     CGPoint nextBaseOffset = baseOffset;
     BOOL nextInsideViewport = insideViewport;
 
@@ -582,18 +606,46 @@
     BOOL foundPaintOffset = NO;
     CGPoint paintOffset = [self sliverPaintOffsetFromInspectorNode:node
                                                              found:&foundPaintOffset];
-    if (foundPaintOffset && !isScrollRoot) {
+    // A proxy chain walks several widget nodes that all report the same
+    // RenderObject, so one parentData shows up once per level and only the
+    // first level may contribute. This matters because
+    // RenderSliverSingleBoxAdapter (SliverFillRemaining, SliverToBoxAdapter)
+    // stores -scrollOffset in its box child's paintOffset
+    // (sliver.dart setChildParentData), and NestedScrollView's body is exactly
+    // such a child: PrimaryScrollController and the body widget both report
+    // the inner viewport, which used to subtract the outer scroll twice.
+    if (foundPaintOffset && !isScrollRoot && !renderObjectAlreadySeen) {
         nextPaintOffset = CGPointMake(sliverPaintOffset.x + paintOffset.x,
                                       sliverPaintOffset.y + paintOffset.y);
-        nextHasPaintOffset = YES;
         if (targetObjectID.length == 0) {
             targetObjectID = [self firstTargetObjectID:targetObjectIDs
                                           inDetailsNode:node];
         }
-        if (targetObjectID.length > 0 && result[targetObjectID] == nil) {
+        // An outer sliver claims the first target below it provisionally, so
+        // this has to accept a provisional entry as well: otherwise a target
+        // that later resolves against a deeper sliver (the NestedScrollView
+        // body, for example) stays pinned to the outermost sliver's origin.
+        if (targetObjectID.length > 0 &&
+            (result[targetObjectID] == nil ||
+             [provisionalObjectIDs containsObject:targetObjectID])) {
+            // The sliver's own origin is only the final answer for the sliver
+            // itself. Some slivers (SliverToBoxAdapter, for example) never
+            // give their box child a `layoutOffset`, so this doubles as a
+            // placement for the first target below. Mark it provisional: a
+            // child that reports its own layoutOffset replaces it, which is
+            // what keeps a cached first item of a scrolled list from snapping
+            // onto the sliver origin.
             result[targetObjectID] = [NSValue valueWithCGPoint:
                 CGPointMake(baseOffset.x + nextPaintOffset.x,
                             baseOffset.y + nextPaintOffset.y)];
+            [provisionalObjectIDs addObject:targetObjectID];
+            if (KKFISliverOffsetTraceEnabled) {
+                NSLog(@"[KKFlutterInspectorKit] sliver trace %@: sliverOrigin "
+                      @"base=%@ paint=%@ -> %@",
+                      targetObjectID, KKFIPointDescription(baseOffset),
+                      KKFIPointDescription(nextPaintOffset),
+                      KKFIPointDescription(result[targetObjectID].CGPointValue));
+            }
         }
     }
 
@@ -611,15 +663,18 @@
             if (!foundCrossAxisOffset) {
                 crossAxisOffset = 0;
             }
-            // The accumulated paintOffset already measures the sliver's origin
-            // from the visible top left corner of the viewport, so it already
-            // contains -scrollOffset once the sliver straddles that corner.
-            // Subtracting scrollOffset again shifts every visible item by the
-            // scroll position. Only use that term when no sliver in this
-            // branch exposed a paintOffset at all.
-            CGFloat mainAxisOffset = nextHasPaintOffset
-                ? layoutOffset
-                : layoutOffset - nextScrollOffset;
+            // paintOffset measures the sliver's origin from the *visible* top
+            // left corner of the viewport (SliverPhysicalParentData: "the
+            // distance from the top left visible corner of the parent"), so it
+            // never carries the scroll position. A sliver paints its box child
+            // at `layoutOffset - constraints.scrollOffset`
+            // (RenderSliverMultiBoxAdaptor.childMainAxisPosition), so the
+            // scroll term is always required. Dropping it leaves every item at
+            // its unscrolled content position, i.e. the whole list sits one
+            // scroll distance too low. When a sliver's own scrollOffset is
+            // clamped to zero the same -scrollOffset shows up in its
+            // paintOffset instead, so the two never double count.
+            CGFloat mainAxisOffset = layoutOffset - nextScrollOffset;
             CGPoint localOffset = [nextAxisDirection isEqualToString:@"down"]
                 ? CGPointMake(nextPaintOffset.x + crossAxisOffset,
                               nextPaintOffset.y + mainAxisOffset)
@@ -631,14 +686,32 @@
                 targetObjectID = [self firstTargetObjectID:targetObjectIDs
                                               inDetailsNode:node];
             }
-            if (targetObjectID.length > 0 && result[targetObjectID] == nil) {
+            if (targetObjectID.length > 0 &&
+                (result[targetObjectID] == nil ||
+                 [provisionalObjectIDs containsObject:targetObjectID])) {
                 result[targetObjectID] =
                     [NSValue valueWithCGPoint:absoluteOffset];
+                [provisionalObjectIDs removeObject:targetObjectID];
+                if (KKFISliverOffsetTraceEnabled) {
+                    NSLog(@"[KKFlutterInspectorKit] sliver trace %@: boxChild "
+                          @"base=%@ paint=%@ layout=%@ scroll=%@ cross=%@ "
+                          @"-> %@",
+                          targetObjectID, KKFIPointDescription(baseOffset),
+                          KKFIPointDescription(nextPaintOffset),
+                          @(round(layoutOffset * 10) / 10),
+                          @(round(nextScrollOffset * 10) / 10),
+                          @(round(crossAxisOffset * 10) / 10),
+                          KKFIPointDescription(absoluteOffset));
+                }
             }
             // A box child of a sliver anchors its own coordinate space.
+            // The scroll offset belongs to the sliver that owns this child, so
+            // it must not leak into anything nested below: the inner scrollable
+            // of a NestedScrollView body reports its own, and falling back to
+            // the outer one would shift its items by the outer scroll position.
             nextBaseOffset = absoluteOffset;
             nextPaintOffset = CGPointZero;
-            nextHasPaintOffset = NO;
+            nextScrollOffset = 0;
         } else if (!foundPaintOffset && nextInsideViewport &&
                    !renderObjectAlreadySeen) {
             BOOL foundBoxOffset = NO;
@@ -661,11 +734,11 @@
                                                     axisDirection:nextAxisDirection
                                                       scrollOffset:nextScrollOffset
                                                 sliverPaintOffset:nextPaintOffset
-                                                    hasPaintOffset:nextHasPaintOffset
                                                         baseOffset:nextBaseOffset
                                                       isScrollRoot:NO
                                                    insideViewport:nextInsideViewport
                                                seenRenderObjectIDs:nextSeenRenderObjectIDs
+                                                   provisionalObjectIDs:provisionalObjectIDs
                                                            result:result];
         }
     }
