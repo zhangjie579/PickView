@@ -12,6 +12,7 @@
 #import "../Inspector/KKFIInspectorJSON.h"
 #import "../Inspector/KKFIInspectorTreeBuilder.h"
 #import "../Model/KKFIInspectorModels.h"
+#import "KKFlutterInspectorConfigure.h"
 
 static NSString *const KKFIHierarchyRequestErrorDomain =
     @"KKFIHierarchyRequestErrorDomain";
@@ -157,8 +158,9 @@ static NSString *const KKFIHierarchyRequestErrorDomain =
         if (self.cancelled) {
             return;
         }
+        
         if (error == nil) {
-            completion([KKFIInspectorJSON normalizedPayloadFromResponse:response],
+            completion([KKFIInspectorJSON normalizedPayloadFromResponse:[KKFIHierarchyRequest rootNodeWithResponse:response]],
                        nil);
             return;
         }
@@ -196,6 +198,54 @@ static NSString *const KKFIHierarchyRequestErrorDomain =
     return [NSError errorWithDomain:KKFIHierarchyRequestErrorDomain
                                code:1
                            userInfo:@{NSLocalizedDescriptionKey : description}];
+}
+
++ (NSDictionary *)rootNodeWithResponse:(NSDictionary *)response {
+    if (!response || !KKFlutterInspectorConfigure.sharedManager.flutterRootNodeWidgetName) {
+        return response;
+    }
+    
+    NSString *flutterRootNodeWidgetName = KKFlutterInspectorConfigure.sharedManager.flutterRootNodeWidgetName;
+    
+    NSDictionary *resultNode;
+    
+    NSDictionary *result1 = response[@"result"];
+    NSDictionary *result2 = result1[@"result"];
+    if ([result2 isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *result = result2;
+        while (result != nil) {
+            NSString *widgetRuntimeType = result[@"widgetRuntimeType"];
+            NSArray<NSDictionary *> *childrens = result[@"children"];
+            if ([widgetRuntimeType isEqualToString:flutterRootNodeWidgetName]) {
+                resultNode = [childrens lastObject];
+                break;
+            } else {
+                result = [childrens lastObject];
+            }
+        }
+    }
+    
+    if (!resultNode) {
+        return response;
+    }
+    
+    NSMutableDictionary *mutableResponse = [[NSMutableDictionary alloc] init];
+    
+    [response enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key, id  _Nonnull obj, BOOL * _Nonnull stop) {
+        if ([key isEqualToString:@"result"]) {
+            NSMutableDictionary *result2 = [[NSMutableDictionary alloc] init];
+            
+            [obj enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key2, id  _Nonnull obj2, BOOL * _Nonnull stop) {
+                result2[key2] = [key2 isEqualToString:@"result"] ? resultNode : obj;
+            }];
+            
+            mutableResponse[key] = result2;
+        } else {
+            mutableResponse[key] = obj;
+        }
+    }];
+    
+    return mutableResponse;
 }
 
 @end

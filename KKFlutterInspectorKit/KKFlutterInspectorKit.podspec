@@ -33,7 +33,8 @@ Pod::Spec.new do |s|
   s.source_files = 'KKFlutterInspectorKit/Classes/**/*.{h,m,mm}'
   s.public_header_files = [
     'KKFlutterInspectorKit/Classes/KKFlutterInspector.h',
-    'KKFlutterInspectorKit/Classes/Internal/Model/KKFIInspectorModels.h'
+    'KKFlutterInspectorKit/Classes/Internal/Model/KKFIInspectorModels.h',
+    'KKFlutterInspectorKit/Classes/KKFlutterInspectorConfigure.h',
   ]
   s.private_header_files = [
     'KKFlutterInspectorKit/Classes/Internal/Connection/*.h',
