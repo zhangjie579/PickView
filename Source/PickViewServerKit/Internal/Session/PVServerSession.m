@@ -18,6 +18,12 @@
 
 static NSTimeInterval const PVServerSessionAuthorizationTimeout = 30.0;
 
+/// PeerTalk frames carry a uint32 payload length and `PTProtocol` aborts the
+/// process as soon as a payload outgrows it. Refuse to emit such a frame and
+/// answer with an error instead, so an oversized response can never take the
+/// host app down.
+static NSUInteger const PVServerSessionMaxResponsePayloadBytes = 64u * 1024u * 1024u;
+
 @interface PVServerSession ()
 @property (nonatomic, strong) id<PVConnectionProtocol> connection;
 @property (nonatomic, strong) id<PVRequestHandlerProtocol> requestHandler;
@@ -95,6 +101,17 @@ static NSTimeInterval const PVServerSessionAuthorizationTimeout = 30.0;
             responseError = [NSError errorWithDomain:PVErrorDomain code:PVErrorCodeUnknown userInfo:@{NSLocalizedDescriptionKey: @"Empty response payload."}];
         }
         NSData *payload = responseError ? [self payloadForError:responseError] : responsePayload;
+        if (payload.length > PVServerSessionMaxResponsePayloadBytes) {
+            NSLog(@"[PickView Server] response for frame type %u exceeded %@ bytes (%@ bytes); sending an error instead.",
+                  frame.type,
+                  @(PVServerSessionMaxResponsePayloadBytes),
+                  @(payload.length));
+            payload = [self payloadForError:
+                [NSError errorWithDomain:PVErrorDomain
+                                    code:PVErrorCodeUnknown
+                                userInfo:@{NSLocalizedDescriptionKey:
+                    [NSString stringWithFormat:@"The response is too large to be sent (%@ bytes).", @(payload.length)]}]];
+        }
         PVFrame *response = [[PVFrame alloc] initWithType:frame.type tag:frame.tag payload:payload];
         [connection sendFrame:response completion:nil];
     }];

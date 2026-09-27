@@ -39,9 +39,17 @@ static NSValue *PVValueFromCGRect(CGRect rect) {
 }
 
 - (void)encodeWithCoder:(NSCoder *)coder {
+    // Both key pairs carry the same bytes for wire compatibility with older
+    // peers. Encode a single instance per image: `pv_inspect_data` re-encodes
+    // the image on every call, so two call sites used to produce two distinct
+    // objects that NSKeyedArchiver could not de-duplicate — doubling the
+    // screenshot size and the PNG work.
+    NSData *encodedSoloImage = self.soloImageData ?: self.soloScreenshot.pv_inspect_data;
+    NSData *encodedGroupImage = self.groupImageData ?: self.groupScreenshot.pv_inspect_data;
+
     [coder encodeObject:self.displayItemID forKey:@"displayItemID"];
-    [coder encodeObject:self.soloImageData ?: self.soloScreenshot.pv_inspect_data forKey:@"soloImageData"];
-    [coder encodeObject:self.groupImageData ?: self.groupScreenshot.pv_inspect_data forKey:@"groupImageData"];
+    [coder encodeObject:encodedSoloImage forKey:@"soloImageData"];
+    [coder encodeObject:encodedGroupImage forKey:@"groupImageData"];
     [self pv_encodeRect:self.frame coder:coder keyPrefix:@"frame"];
     [self pv_encodeRect:self.bounds coder:coder keyPrefix:@"bounds"];
     [coder encodeBool:self.hidden forKey:@"hidden"];
@@ -51,8 +59,8 @@ static NSValue *PVValueFromCGRect(CGRect rect) {
     [coder encodeObject:self.flutterDetail forKey:@"flutterDetail"];
 
     [coder encodeObject:@(self.displayItemOid) forKey:@"displayItemOid"];
-    [coder encodeObject:self.groupImageData ?: self.groupScreenshot.pv_inspect_data forKey:@"groupScreenshot"];
-    [coder encodeObject:self.soloImageData ?: self.soloScreenshot.pv_inspect_data forKey:@"soloScreenshot"];
+    [coder encodeObject:encodedGroupImage forKey:@"groupScreenshot"];
+    [coder encodeObject:encodedSoloImage forKey:@"soloScreenshot"];
     [coder encodeObject:self.frameValue ?: PVValueFromCGRect(self.frame) forKey:@"frameValue"];
     [coder encodeObject:self.boundsValue ?: PVValueFromCGRect(self.bounds) forKey:@"boundsValue"];
     [coder encodeObject:self.hiddenValue ?: @(self.hidden) forKey:@"hiddenValue"];

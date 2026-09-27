@@ -455,7 +455,12 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
         ? element.elementDescription : element.widgetType;
     detail.renderObjectType = element.renderObjectType;
     detail.capabilities = element.capabilities.copy;
-    detail.rawJSON = [self prettyJSONStringForObject:element.rawJSON ?: @{}];
+    // `element.rawJSON` is the raw layout node, whose `children` array still
+    // carries the whole subtree nested. Pretty-printing that per node makes the
+    // archived tree grow as O(nodes × depth); a few thousand nodes are enough
+    // to push a details response past the 4 GiB frame limit and abort the host
+    // app inside PeerTalk. Collapse descendants to an id/type summary first.
+    detail.rawJSON = [self prettyJSONStringForObject:[self collapsedLayoutJSON:element.rawJSON] ?: @{}];
 
     PVFlutterDetailSection *geometry = [PVFlutterDetailSection new];
     geometry.identifier = @"geometry";
@@ -516,6 +521,38 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
     }
     detail.layoutGroups = layoutGroups.copy;
     return detail;
+}
+
+/// Returns a copy of the layout node whose `children` no longer embed their own
+/// subtrees. Every element keeps a reference to the raw layout node, so without
+/// this the same descendant JSON is serialised once per ancestor.
+- (NSDictionary *)collapsedLayoutJSON:(NSDictionary *)layoutJSON {
+    if (![layoutJSON isKindOfClass:NSDictionary.class]) return nil;
+    NSArray *children = [layoutJSON[@"children"] isKindOfClass:NSArray.class]
+        ? layoutJSON[@"children"] : nil;
+    if (children.count == 0) return layoutJSON;
+    NSMutableArray<NSDictionary *> *summary =
+        [NSMutableArray arrayWithCapacity:children.count];
+    for (id value in children) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *child = (NSDictionary *)value;
+        NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithCapacity:2];
+        NSString *nodeID = [child[@"valueId"] isKindOfClass:NSString.class]
+            ? child[@"valueId"]
+            : ([child[@"objectId"] isKindOfClass:NSString.class] ? child[@"objectId"] : nil);
+        if (nodeID.length) entry[@"objectId"] = nodeID;
+        for (NSString *key in @[@"widgetRuntimeType", @"runtimeType", @"type"]) {
+            NSString *type = [child[key] isKindOfClass:NSString.class] ? child[key] : nil;
+            if (type.length) {
+                entry[@"type"] = type;
+                break;
+            }
+        }
+        [summary addObject:entry.copy];
+    }
+    NSMutableDictionary *collapsed = [layoutJSON mutableCopy];
+    collapsed[@"children"] = summary.copy;
+    return collapsed.copy;
 }
 
 // The tree builder only parses a decoration when the diagnostics were already
@@ -1134,16 +1171,28 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
     return field;
 }
 
+/// Hard ceiling for a single JSON detail string. A single field must never be
+/// able to dominate a response that still has to fit into one PeerTalk frame.
+static NSUInteger const PVFlutterPrettyJSONCharacterLimit = 256u * 1024u;
+
 - (NSString *)prettyJSONStringForObject:(id)object {
-    if (![NSJSONSerialization isValidJSONObject:object]) {
-        return [object description] ?: @"";
+    NSString *text = nil;
+    if ([NSJSONSerialization isValidJSONObject:object]) {
+        NSData *data = [NSJSONSerialization dataWithJSONObject:object
+                                                       options:NSJSONWritingPrettyPrinted
+                                                         error:nil];
+        text = data.length > 0
+            ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+            : nil;
+    } else {
+        text = [object description];
     }
-    NSData *data = [NSJSONSerialization dataWithJSONObject:object
-                                                   options:NSJSONWritingPrettyPrinted
-                                                     error:nil];
-    return data.length > 0
-        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
-        : @"";
+    text = text ?: @"";
+    if (text.length <= PVFlutterPrettyJSONCharacterLimit) return text;
+    NSString *suffix = [NSString stringWithFormat:@"\n… truncated, %@ characters total",
+                        @(text.length)];
+    return [[text substringToIndex:PVFlutterPrettyJSONCharacterLimit]
+               stringByAppendingString:suffix];
 }
 
 - (UIColor *)colorFromDictionary:(NSDictionary *)dictionary {
