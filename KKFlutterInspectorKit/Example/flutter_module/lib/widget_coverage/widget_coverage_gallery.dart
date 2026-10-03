@@ -5,6 +5,7 @@ import 'layout_coverage_page.dart';
 import 'paint_coverage_page.dart';
 import 'route_coverage_page.dart';
 import 'scroll_coverage_page.dart';
+import 'single_child_scroll_coverage_page.dart';
 
 class WidgetCoverageGalleryPage extends StatelessWidget {
   const WidgetCoverageGalleryPage({super.key});
@@ -23,6 +24,12 @@ class WidgetCoverageGalleryPage extends StatelessWidget {
         title: 'Scroll & Sliver',
         subtitle: 'CustomScrollView、SliverAppBar、Grid 和嵌套滚动',
         builder: (_) => const ScrollCoveragePage(),
+      ),
+      _CoverageEntry(
+        icon: Icons.swap_vert_outlined,
+        title: 'SingleChildScrollView',
+        subtitle: '盒式滚动：滑动后内容偏移随 scrollOffset 变化',
+        builder: (_) => const SingleChildScrollCoveragePage(),
       ),
       _CoverageEntry(
         icon: Icons.auto_awesome_outlined,

@@ -41,6 +41,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
         [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSString *> *offsetBridgeRenderObjectIDsByID =
         [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *singleChildScrollViewObjectIDs = [NSMutableSet set];
     NSMutableSet<NSString *> *deepSubtreeObjectIDs = [NSMutableSet set];
     [self collectLayoutPropertyObjectIDsFromValue:layoutPayload
                                              into:objectIDs
@@ -50,6 +51,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                   customScrollTargetObjectIDsByID:customScrollTargetObjectIDsByID
                     offsetBridgeChildObjectIDsByID:offsetBridgeChildObjectIDsByID
                     offsetBridgeRenderObjectIDsByID:offsetBridgeRenderObjectIDsByID
+                    singleChildScrollViewObjectIDs:singleChildScrollViewObjectIDs
                               deepSubtreeObjectIDs:deepSubtreeObjectIDs];
     if (objectIDs.count == 0) {
         completion(@{}, @{});
@@ -82,13 +84,18 @@ static NSString *KKFIPointDescription(CGPoint point) {
         NSSet<NSString *> *offsetBridgeChildObjectIDs =
             offsetBridgeChildObjectIDsByID[objectID];
         BOOL isOffsetBridgeRoot = offsetBridgeChildObjectIDs.count > 0;
+        // A SingleChildScrollView scrolls a single box child, so its content
+        // needs the same offset resolution pass as a ListView even though it
+        // never builds a sliver.
+        BOOL isSingleChildScrollView =
+            [singleChildScrollViewObjectIDs containsObject:objectID];
         // A NestedScrollView nests a second scrollable inside its body, so its
         // items sit one full viewport deeper than a plain CustomScrollView.
         BOOL needsDeepSubtree =
             isOffsetBridgeRoot || [deepSubtreeObjectIDs containsObject:objectID];
         BOOL needsDetailsSubtree =
             isCard || isContainer || isScrollableList || isCustomScrollView ||
-            isOffsetBridgeRoot;
+            isOffsetBridgeRoot || isSingleChildScrollView;
         NSString *method = needsDetailsSubtree
             ? @"ext.flutter.inspector.getDetailsSubtree"
             : @"ext.flutter.inspector.getProperties";
@@ -121,6 +128,17 @@ static NSString *KKFIPointDescription(CGPoint point) {
                     [resolvedOffsetsByID addEntriesFromDictionary:offsets];
                     properties =
                         [self resolvedMaterialPropertiesFromDetailsPayload:payload];
+                } else if (isSingleChildScrollView) {
+                    // Placed before the sliver based branches on purpose: a
+                    // SingleChildScrollView also keeps child object IDs in
+                    // scrollViewChildObjectIDsByID, but a sliver walk can never
+                    // resolve anything inside it.
+                    NSDictionary<NSString *, NSValue *> *offsets =
+                        [self singleChildScrollResolvedOffsetsForTargetObjectIDs:
+                            scrollViewChildObjectIDs
+                                                                  detailsPayload:payload
+                                                                    layoutValue:layoutPayload];
+                    [resolvedOffsetsByID addEntriesFromDictionary:offsets];
                 } else if (isCustomScrollView) {
                     NSDictionary<NSString *, NSValue *> *offsets =
                         [self sliverResolvedOffsetsForTargetObjectIDs:
@@ -254,6 +272,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                  customScrollTargetObjectIDsByID:(NSMutableDictionary<NSString *, NSSet<NSString *> *> *)customScrollTargetObjectIDsByID
                    offsetBridgeChildObjectIDsByID:(NSMutableDictionary<NSString *, NSSet<NSString *> *> *)offsetBridgeChildObjectIDsByID
                    offsetBridgeRenderObjectIDsByID:(NSMutableDictionary<NSString *, NSString *> *)offsetBridgeRenderObjectIDsByID
+                   singleChildScrollViewObjectIDs:(NSMutableSet<NSString *> *)singleChildScrollViewObjectIDs
                              deepSubtreeObjectIDs:(NSMutableSet<NSString *> *)deepSubtreeObjectIDs {
     if (![value isKindOfClass:NSDictionary.class]) {
         return;
@@ -303,8 +322,14 @@ static NSString *KKFIPointDescription(CGPoint point) {
         [baseWidgetType isEqualToString:@"NestedScrollView"] ||
         [baseWidgetType isEqualToString:@"PageView"] ||
         [baseWidgetType isEqualToString:@"TabBarView"];
+    // A SingleChildScrollView reuses the scrollable list bookkeeping: it also
+    // owns one piece of content whose position the Layout Explorer cannot
+    // report, so it needs the same details subtree pass.
+    BOOL isSingleChildScrollWidget =
+        [baseWidgetType isEqualToString:@"SingleChildScrollView"];
     if (isScrollableListWidget ||
         isCustomScrollRootWidget ||
+        isSingleChildScrollWidget ||
         [baseWidgetType isEqualToString:@"Card"] ||
         [baseWidgetType isEqualToString:@"Container"] ||
         isOffsetBridgeRoot) {
@@ -350,6 +375,29 @@ static NSString *KKFIPointDescription(CGPoint point) {
                 }
                 if ([baseWidgetType isEqualToString:@"NestedScrollView"]) {
                     [deepSubtreeObjectIDs addObject:objectID];
+                }
+            } else if (isSingleChildScrollWidget) {
+                // Only the direct child moves with the viewport. Descending any
+                // further would apply the same translation a second time to
+                // nodes that already inherit it from their parent's frame.
+                NSMutableSet<NSString *> *childObjectIDs = [NSMutableSet set];
+                NSArray *children = [node[@"children"] isKindOfClass:NSArray.class]
+                    ? node[@"children"]
+                    : @[];
+                for (id childValue in children) {
+                    if (![childValue isKindOfClass:NSDictionary.class]) {
+                        continue;
+                    }
+                    NSString *childObjectID =
+                        [KKFIInspectorJSON nodeIDFromDictionary:childValue];
+                    if (childObjectID.length > 0) {
+                        [childObjectIDs addObject:childObjectID];
+                    }
+                }
+                if (childObjectIDs.count > 0) {
+                    [objectIDs addObject:objectID];
+                    [singleChildScrollViewObjectIDs addObject:objectID];
+                    scrollViewChildObjectIDsByID[objectID] = childObjectIDs.copy;
                 }
             } else if (isOffsetBridgeRoot) {
                 NSMutableSet<NSString *> *childObjectIDs = [NSMutableSet set];
@@ -397,6 +445,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                       customScrollTargetObjectIDsByID:customScrollTargetObjectIDsByID
                         offsetBridgeChildObjectIDsByID:offsetBridgeChildObjectIDsByID
                         offsetBridgeRenderObjectIDsByID:offsetBridgeRenderObjectIDsByID
+                        singleChildScrollViewObjectIDs:singleChildScrollViewObjectIDs
                                   deepSubtreeObjectIDs:deepSubtreeObjectIDs];
     }
 }
@@ -539,6 +588,158 @@ static NSString *KKFIPointDescription(CGPoint point) {
               foundViewportOffset ? @(viewportOffset) : @"n/a");
     }
     return result.copy;
+}
+
+/// A SingleChildScrollView scrolls one box child by translating it at paint
+/// time: `_RenderSingleChildViewport` keeps a bare `ParentData` on its child and
+/// paints it at `_paintOffset` (single_child_scroll_view.dart), so the Layout
+/// Explorer never reports an offset for the content and the whole subtree stays
+/// pinned to the viewport origin however far the user scrolled. The viewport
+/// publishes the translation as its own `offset` property, for example
+/// `Offset(0.0, -412.0)` for a list scrolled by 412, and that value already
+/// carries the axis direction and the `reverse` sign.
+///
+/// The content's own parentData offset is added on top because `padding:`
+/// inserts a framework owned RenderPadding between the viewport and the
+/// content: the viewport then only reports the padding node, and the padding
+/// inset is the only piece the Layout Explorer payload exposes.
+- (NSDictionary<NSString *, NSValue *> *)
+    singleChildScrollResolvedOffsetsForTargetObjectIDs:(NSSet<NSString *> *)targetObjectIDs
+                                        detailsPayload:(id)payload
+                                          layoutValue:(id)layoutValue {
+    if (![payload isKindOfClass:NSDictionary.class] ||
+        targetObjectIDs.count == 0) {
+        return @{};
+    }
+
+    BOOL foundPaintOffset = NO;
+    CGPoint paintOffset =
+        [self singleChildViewportPaintOffsetFromValue:payload
+                                                found:&foundPaintOffset];
+    if (!foundPaintOffset) {
+        NSLog(@"[KKFlutterInspectorKit] SingleChildScrollView viewport "
+              @"unresolved: targets=%@",
+              @(targetObjectIDs.count));
+        return @{};
+    }
+
+    NSDictionary<NSString *, NSValue *> *localOffsets =
+        [self directOffsetsForTargetObjectIDs:targetObjectIDs
+                                inLayoutValue:layoutValue];
+    NSMutableDictionary<NSString *, NSValue *> *result =
+        [NSMutableDictionary dictionaryWithCapacity:targetObjectIDs.count];
+    for (NSString *objectID in targetObjectIDs) {
+        CGPoint offset = paintOffset;
+        NSValue *localOffsetValue = localOffsets[objectID];
+        if (localOffsetValue != nil) {
+            CGPoint localOffset = localOffsetValue.CGPointValue;
+            offset.x += localOffset.x;
+            offset.y += localOffset.y;
+        }
+        result[objectID] = [NSValue valueWithCGPoint:offset];
+    }
+    return result.copy;
+}
+
+/// Walks a details subtree for the `_RenderSingleChildViewport` that a
+/// SingleChildScrollView builds and returns the paint translation it applies to
+/// its child.
+- (CGPoint)singleChildViewportPaintOffsetFromValue:(id)value
+                                             found:(BOOL *)found {
+    if ([value isKindOfClass:NSArray.class]) {
+        for (id child in (NSArray *)value) {
+            BOOL childFound = NO;
+            CGPoint offset =
+                [self singleChildViewportPaintOffsetFromValue:child
+                                                        found:&childFound];
+            if (childFound) {
+                if (found != NULL) {
+                    *found = YES;
+                }
+                return offset;
+            }
+        }
+    } else if ([value isKindOfClass:NSDictionary.class]) {
+        NSDictionary *node = value;
+        NSDictionary *renderObject =
+            [self renderObjectPropertyFromInspectorNode:node];
+        NSString *description =
+            [renderObject[@"description"] isKindOfClass:NSString.class]
+                ? renderObject[@"description"]
+                : nil;
+        if ([description containsString:@"SingleChildViewport"]) {
+            NSArray *properties =
+                [renderObject[@"properties"] isKindOfClass:NSArray.class]
+                    ? renderObject[@"properties"]
+                    : @[];
+            NSString *offsetDescription =
+                [self inspectorDescriptionForProperty:
+                    [self inspectorPropertyNamed:@"offset"
+                                     inProperties:properties]];
+            BOOL foundOffset = NO;
+            CGPoint offset = [self paintOffsetFromDescription:offsetDescription
+                                                        found:&foundOffset];
+            if (foundOffset) {
+                if (found != NULL) {
+                    *found = YES;
+                }
+                return offset;
+            }
+        }
+
+        NSArray *children = [node[@"children"] isKindOfClass:NSArray.class]
+            ? node[@"children"]
+            : @[];
+        for (id child in children) {
+            BOOL childFound = NO;
+            CGPoint offset =
+                [self singleChildViewportPaintOffsetFromValue:child
+                                                        found:&childFound];
+            if (childFound) {
+                if (found != NULL) {
+                    *found = YES;
+                }
+                return offset;
+            }
+        }
+    }
+
+    if (found != NULL) {
+        *found = NO;
+    }
+    return CGPointZero;
+}
+
+/// Parses a standalone `Offset(dx, dy)` diagnostics description, the shape
+/// `_RenderSingleChildViewport` reports its paint translation in.
+- (CGPoint)paintOffsetFromDescription:(NSString *)description
+                                found:(BOOL *)found {
+    NSRegularExpression *regex = [NSRegularExpression
+        regularExpressionWithPattern:
+            @"Offset\\(\\s*([-+0-9.eE]+)\\s*,\\s*([-+0-9.eE]+)\\s*\\)"
+                             options:0
+                               error:nil];
+    NSTextCheckingResult *match =
+        [regex firstMatchInString:description ?: @""
+                          options:0
+                            range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges == 3) {
+        CGFloat x = [[description substringWithRange:[match rangeAtIndex:1]]
+            doubleValue];
+        CGFloat y = [[description substringWithRange:[match rangeAtIndex:2]]
+            doubleValue];
+        if (isfinite(x) && isfinite(y)) {
+            if (found != NULL) {
+                *found = YES;
+            }
+            return CGPointMake(x, y);
+        }
+    }
+
+    if (found != NULL) {
+        *found = NO;
+    }
+    return CGPointZero;
 }
 
 /// Resolves one node's origin and the coordinate space its children use.

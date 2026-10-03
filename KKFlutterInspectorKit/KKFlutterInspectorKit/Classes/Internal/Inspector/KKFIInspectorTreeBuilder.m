@@ -1840,6 +1840,69 @@ static NSString *const KKFIInspectorTreeBuilderErrorDomain =
     return CGPointZero;
 }
 
+/// Reads the paint translation a `_RenderSingleChildViewport` applies to its
+/// child, for example `Offset(0.0, -412.0)` for a vertically scrolled
+/// SingleChildScrollView. Returns not found for every other render parent, so
+/// an ordinary box keeps its normal parentData based placement.
++ (CGPoint)singleChildViewportPaintOffsetFromNode:(NSDictionary *)node
+                                            found:(BOOL *)found {
+    NSDictionary *parentRenderElement =
+        [node[@"parentRenderElement"] isKindOfClass:NSDictionary.class]
+            ? node[@"parentRenderElement"]
+            : nil;
+    NSDictionary *renderObject =
+        [parentRenderElement[@"renderObject"] isKindOfClass:NSDictionary.class]
+            ? parentRenderElement[@"renderObject"]
+            : [self diagnosticPropertyNamed:@"renderObject"
+                               inProperties:parentRenderElement[@"properties"]];
+    NSString *description =
+        [renderObject[@"description"] isKindOfClass:NSString.class]
+            ? renderObject[@"description"]
+            : nil;
+    // Matches both `_RenderSingleChildViewport#1a2b3` and the long form of the
+    // same diagnostics node.
+    if (![description containsString:@"SingleChildViewport"]) {
+        if (found != NULL) {
+            *found = NO;
+        }
+        return CGPointZero;
+    }
+
+    NSArray *properties =
+        [renderObject[@"properties"] isKindOfClass:NSArray.class]
+            ? renderObject[@"properties"]
+            : @[];
+    NSString *offsetDescription = [self
+        diagnosticDescription:[self diagnosticPropertyNamed:@"offset"
+                                               inProperties:properties]];
+    NSRegularExpression *regex = [NSRegularExpression
+        regularExpressionWithPattern:
+            @"Offset\\(\\s*([-+0-9.eE]+)\\s*,\\s*([-+0-9.eE]+)\\s*\\)"
+                             options:0
+                               error:nil];
+    NSTextCheckingResult *match =
+        [regex firstMatchInString:offsetDescription
+                          options:0
+                            range:NSMakeRange(0, offsetDescription.length)];
+    if (match.numberOfRanges == 3) {
+        double x = [[offsetDescription
+            substringWithRange:[match rangeAtIndex:1]] doubleValue];
+        double y = [[offsetDescription
+            substringWithRange:[match rangeAtIndex:2]] doubleValue];
+        if (isfinite(x) && isfinite(y)) {
+            if (found != NULL) {
+                *found = YES;
+            }
+            return CGPointMake(x, y);
+        }
+    }
+
+    if (found != NULL) {
+        *found = NO;
+    }
+    return CGPointZero;
+}
+
 + (CGPoint)offsetFromNode:(NSDictionary *)node
     useParentRenderElementOffset:(BOOL)useParentRenderElementOffset
                            found:(BOOL *)found {
@@ -1851,6 +1914,27 @@ static NSString *const KKFIInspectorTreeBuilderErrorDomain =
             *found = YES;
         }
         return directOffset;
+    }
+
+    // A SingleChildScrollView never gives its content a BoxParentData offset:
+    // `_RenderSingleChildViewport.setupParentData` allocates a bare `ParentData`
+    // on purpose and moves the child at paint time with `_paintOffset`
+    // (single_child_scroll_view.dart). The Layout Explorer can only report
+    // offsets it finds in parentData, so the whole content subtree stays pinned
+    // to the viewport origin no matter how far the user scrolled. The viewport
+    // publishes that translation as its own `offset` property
+    // (`DiagnosticsProperty<Offset>` holding `_paintOffset`), reachable through
+    // parentRenderElement, and the value already carries the axis direction and
+    // the `reverse` sign, so it applies without any conversion.
+    BOOL foundViewportPaintOffset = NO;
+    CGPoint viewportPaintOffset =
+        [self singleChildViewportPaintOffsetFromNode:node
+                                               found:&foundViewportPaintOffset];
+    if (foundViewportPaintOffset) {
+        if (found != NULL) {
+            *found = YES;
+        }
+        return viewportPaintOffset;
     }
 
     // Some high-level widgets expose a semantic RenderObject whose parentData
