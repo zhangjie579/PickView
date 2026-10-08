@@ -2,6 +2,9 @@
 
 #import "PVDetailAppsManager.h"
 
+#import "PVDetailPreferenceManager.h"
+#import "PVDetailStaticHierarchyDataSource.h"
+#import "PVHierarchyInfo.h"
 #import "PVInspectionRequestClient.h"
 #import "PVRequestAttachment.h"
 #import "PVRequestType.h"
@@ -71,6 +74,67 @@ NSString *const PVDetailInspectingAppDidEndNotificationName = @"PVDetailInspecti
     if (shouldPostNotification) {
         [[NSNotificationCenter defaultCenter] postNotificationName:PVDetailInspectingAppDidEndNotificationName object:self];
     }
+}
+
+#pragma mark - Inspector settings
+
+- (NSDictionary<NSString *, id> *)currentInspectorSettings {
+    return @{
+        PVInspectorSettingsKey_HideFlutterBlocWidgets :
+            @([PVDetailPreferenceManager mainManager].hideFlutterBlocWidgets),
+    };
+}
+
+- (RACSignal *)pushInspectorSettingsToApp:(PVDetailInspectableApp *)app {
+    if (!app) {
+        return [RACSignal empty];
+    }
+    // Apps embedding an older PickViewServer do not know this request type and
+    // answer with an error immediately. The preference simply will not apply,
+    // so swallow it instead of failing the whole inspection.
+    return [[app sendInspectorSettings:[self currentInspectorSettings]]
+        catch:^RACSignal *(NSError *error) {
+            NSLog(@"[PickView] Inspector settings were not applied: %@",
+                  error.localizedDescription);
+            return [RACSignal empty];
+        }];
+}
+
+- (void)pushInspectorSettingsAndReloadInspection {
+    PVDetailInspectableApp *app = self.inspectingApp;
+    if (!app) {
+        return;
+    }
+
+    // pushInspectorSettingsToApp: swallows errors, so this always completes —
+    // either after the app confirmed the settings or right after the failure.
+    @weakify(self);
+    [[[self pushInspectorSettingsToApp:app] deliverOnMainThread]
+        subscribeCompleted:^{
+            @strongify(self);
+            [self reloadHierarchyForApp:app];
+        }];
+}
+
+- (void)reloadHierarchyForApp:(PVDetailInspectableApp *)app {
+    if (!app || app != self.inspectingApp) {
+        return;
+    }
+    @weakify(self);
+    [[[app fetchHierarchyData] deliverOnMainThread]
+        subscribeNext:^(PVHierarchyInfo *info) {
+            @strongify(self);
+            if (!info || app != self.inspectingApp) {
+                return;
+            }
+            [[PVDetailStaticHierarchyDataSource sharedInstance]
+                reloadWithHierarchyInfo:info
+                              keepState:NO];
+        }
+        error:^(NSError *error) {
+            NSLog(@"[PickView] Failed to reload hierarchy: %@",
+                  error.localizedDescription);
+        }];
 }
 
 - (void)inspectConnectionStateAtDate:(NSDate *)date {

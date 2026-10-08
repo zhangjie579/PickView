@@ -445,6 +445,11 @@ static NSToolbarItemIdentifier const PVToolbarItemIdentifierLAN = @"PVToolbarIte
 
 - (void)start {
     PickViewClient.sharedClient.delegate = self;
+    // Hand the Inspector preferences to the client so they go out the moment a
+    // pipe is established, instead of waiting until a session is opened here.
+    PickViewClient.sharedClient.inspectorSettingsProvider = ^NSDictionary<NSString *, id> * {
+        return [PVDetailAppsManager sharedInstance].currentInspectorSettings;
+    };
     [self.launchWindowController showWindow:nil];
     [PickViewClient.sharedClient startScanning];
 }
@@ -703,7 +708,10 @@ static NSToolbarItemIdentifier const PVToolbarItemIdentifierLAN = @"PVToolbarIte
 - (void)enterDetailWithInspectableApp:(PVDetailInspectableApp *)targetApp {
     [PVDetailPerformanceReporter.sharedInstance willStartReload];
     @weakify(self);
-    [[targetApp fetchHierarchyData] subscribeNext:^(PVHierarchyInfo *info) {
+    // Inspector preferences were already pushed when the session opened, so the
+    // hierarchy that comes back here already honours them.
+    RACSignal *hierarchySignal = [targetApp fetchHierarchyData];
+    [hierarchySignal subscribeNext:^(PVHierarchyInfo *info) {
         @strongify(self);
         self.isEnteringSession = NO;
         if (!info) {

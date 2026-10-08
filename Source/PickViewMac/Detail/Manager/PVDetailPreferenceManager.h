@@ -62,6 +62,11 @@ typedef NS_ENUM(NSInteger, PVMeasureState) {
 // 范围是 0 ～ 1
 @property(nonatomic, strong, readonly) PVDetailDoubleMsgAttribute *zInterspace;
 
+/// 是否在层级树里隐藏 Bloc 相关的 Flutter 控件（BlocProvider / BlocBuilder 等）。
+/// 该开关会下发给被调试 app，因此只有集成了对应版本 PickViewServer 的 app 才会生效。
+/// 默认为 NO。
+@property(nonatomic, assign) BOOL hideFlutterBlocWidgets;
+
 @property(nonatomic, assign) BOOL enableReport;
 
 @property(nonatomic, assign) BOOL rgbaFormat;

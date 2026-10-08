@@ -11,6 +11,7 @@
 #import "PVAppInfoHandler.h"
 #import "PVCompositeRequestHandler.h"
 #import "PVConnectionProtocol.h"
+#import "PVFlutterSettingsHandler.h"
 #import "PVHeartbeatHandler.h"
 #import "PVHierarchyDetailsHandler.h"
 #import "PVHierarchyHandler.h"
@@ -179,6 +180,10 @@
         [handlers addObject:[[PVHierarchyHandler alloc] initWithProvider:self.hierarchyProvider]];
         [handlers addObject:[[PVHierarchyDetailsHandler alloc] initWithProvider:self.hierarchyProvider]];
     }
+    // Applies Inspector preferences pushed by the Mac client. The handler
+    // resolves KKFlutterInspectorKit at runtime, so registering it on macOS
+    // peers is harmless and keeps one code path.
+    [handlers addObject:[[PVFlutterSettingsHandler alloc] init]];
     [handlers addObjectsFromArray:self.customHandlers];
     return [[PVCompositeRequestHandler alloc] initWithHandlers:handlers];
 }

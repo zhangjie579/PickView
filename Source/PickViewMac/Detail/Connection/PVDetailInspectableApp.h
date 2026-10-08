@@ -27,6 +27,9 @@
 
 - (RACSignal *)fetchHierarchyData;
 
+/// 把 Inspector 偏好下发给被调试 app。旧版本的 app 不支持该请求，会直接报错，调用方需要容忍失败。
+- (RACSignal *)sendInspectorSettings:(NSDictionary<NSString *, id> *)settings;
+
 - (RACSignal *)submitInbuiltModification:(PVAttributeModification *)modification;
 - (RACSignal *)submitCustomModification:(PVCustomAttrModification *)modification;
 

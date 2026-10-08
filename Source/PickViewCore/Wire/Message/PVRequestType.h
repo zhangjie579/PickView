@@ -27,8 +27,14 @@ typedef NS_ENUM(uint32_t, PVRequestType) {
     PVRequestTypeMessage = 230,
     PVRequestTypeHeartbeat = 231,
     PVRequestTypeWindowList = 232,
+    /// Inspector 偏好设置由 Mac 端下发给被调试 app，例如 Flutter 层级过滤开关
+    PVRequestTypeInspectorSettings = 233,
 
     PVRequestTypeCancelHierarchyDetails = 304
 };
+
+/// PVRequestTypeInspectorSettings 的设置项 key。Mac 端与被调试 app 共用同一个 header，
+/// 这里用宏定义以避免为了一个常量再新增一个编译单元。
+#define PVInspectorSettingsKey_HideFlutterBlocWidgets @"hideFlutterBlocWidgets"
 
 #endif /* PVRequestType_h */

@@ -7,6 +7,7 @@
 
 #import "PVDetailPrefix.h"
 #import "PVDetailPreferenceViewController.h"
+#import "PVDetailAppsManager.h"
 #import "PVDetailPreferenceManager.h"
 #import "PVDetailPreferenceSwitchView.h"
 #import "PVDetailPreferencePopupView.h"
@@ -19,6 +20,7 @@
 @property(nonatomic, strong) PVDetailPreferencePopupView *view_appearance;
 @property(nonatomic, strong) PVDetailPreferencePopupView *view_colorFormat;
 @property(nonatomic, strong) PVDetailPreferenceSwitchView *view_enableLog;
+@property(nonatomic, strong) PVDetailPreferenceSwitchView *view_hideFlutterBloc;
 @property(nonatomic, strong) PVDetailPreferencePopupView *view_contrast;
 
 //@property(nonatomic, strong) NSButton *debugButton;
@@ -70,7 +72,21 @@
         [PVDetailPreferenceManager mainManager].enableReport = isChecked;
     };
     [self.view addSubview:self.view_enableLog];
-    
+
+    self.view_hideFlutterBloc = [[PVDetailPreferenceSwitchView alloc] initWithTitle:NSLocalizedString(@"Hide Flutter Bloc widgets", nil) message:NSLocalizedString(@"Hide flutter_bloc widgets such as BlocProvider and BlocBuilder. Their children stay in place.", nil)];
+    self.view_hideFlutterBloc.didChange = ^(BOOL isChecked) {
+        PVDetailPreferenceManager *manager = [PVDetailPreferenceManager mainManager];
+        // renderFromPreferenceManager also assigns isChecked, which fires this
+        // block; bail out so merely opening Preferences does not re-inspect.
+        if (manager.hideFlutterBlocWidgets == isChecked) {
+            return;
+        }
+        manager.hideFlutterBlocWidgets = isChecked;
+        /// 开关改变后立刻下发给被调试 app 并重新抓树
+        [[PVDetailAppsManager sharedInstance] pushInspectorSettingsAndReloadInspection];
+    };
+    [self.view addSubview:self.view_hideFlutterBloc];
+
 //    self.debugButton = [NSButton lk_normalButtonWithTitle:@"Debug" target:self action:@selector(_handleDebugButton)];
 //    [self.view addSubview:self.debugButton];
     
@@ -94,6 +110,7 @@
     self.view_appearance.selectedIndex = manager.appearanceType;
     self.view_doubleClick.selectedIndex = manager.doubleClickBehavior;
     self.view_enableLog.isChecked = manager.enableReport;
+    self.view_hideFlutterBloc.isChecked = manager.hideFlutterBlocWidgets;
 }
 
 - (void)viewDidLayout {
@@ -109,7 +126,7 @@
     $(self.view_doubleClick).x(insets.left).toRight(insets.right).y(self.view_contrast.$maxY).height(50);
     
     __block CGFloat y = self.view_doubleClick.$maxY;
-    [$(self.view_enableLog).array enumerateObjectsUsingBlock:^(NSView *  _Nonnull view, NSUInteger idx, BOOL * _Nonnull stop) {
+    [$(self.view_enableLog, self.view_hideFlutterBloc).array enumerateObjectsUsingBlock:^(NSView *  _Nonnull view, NSUInteger idx, BOOL * _Nonnull stop) {
         $(view).x(115).toRight(insets.right).y(y).heightToFit;
         y = view.$maxY + 5;
     }];
@@ -125,6 +142,7 @@
     manager.rgbaFormat = YES;
     manager.doubleClickBehavior = PVDoubleClickBehaviorCollapse;
     manager.imageContrastLevel = 0;
+    manager.hideFlutterBlocWidgets = NO;
     [self renderFromPreferenceManager];
     
 #if DEBUG

@@ -339,8 +339,42 @@ static NSString * const PVClientLANBlockedByUSBMessage = @"当前 App 已经通�
     [self.sessionManager addSession:session];
     [self notifyConnectedEndpoint:session.endpoint];
     if (session.state == PVClientSessionStateReady) {
+        // Push Inspector preferences as the very first inspection request so
+        // everything the peer answers afterwards already honours them.
+        [self pushInspectorSettingsWithSession:session];
         [self sendSmokeMessageWithSession:session endpoint:session.endpoint];
     }
+}
+
+- (void)pushInspectorSettingsWithSession:(PVClientSession *)session {
+    NSDictionary<NSString *, id> * (^provider)(void) = self.inspectorSettingsProvider;
+    if (!provider) {
+        return;
+    }
+
+    NSDictionary<NSString *, id> *settings = provider();
+    if (settings.count == 0) {
+        return;
+    }
+
+    NSError *archiveError = nil;
+    NSData *payload = [PVArchiveCodec archivedDataWithObject:settings error:&archiveError];
+    if (!payload) {
+        [self notifyLog:[NSString stringWithFormat:@"inspector settings archive failed: %@", archiveError.localizedDescription ?: @""]];
+        return;
+    }
+
+    // Peers embedding an older PickViewServer do not know this request type and
+    // answer with an error right away. Log and move on instead of failing the
+    // connection.
+    [session sendRequestType:PVRequestTypeInspectorSettings
+                     payload:payload
+             timeoutInterval:8
+                  completion:^(NSData *responsePayload, NSError *error) {
+        if (error) {
+            [self notifyLog:[NSString stringWithFormat:@"inspector settings not applied: %@", error.localizedDescription ?: @""]];
+        }
+    }];
 }
 
 - (nullable id<PVConnectionProtocol>)connectionForEndpoint:(id<PVEndpointProtocol>)endpoint {

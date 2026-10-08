@@ -43,6 +43,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) id<PickViewClientDelegate> delegate;
 @property (nonatomic, strong, readonly) PVClientSessionManager *sessionManager;
 
+/// 管道建立成功后立刻下发给被调试 app 的 Inspector 偏好（例如 Flutter 层级过滤开关）。
+///
+/// 返回 nil 或空字典表示不下发。由宿主 App（PickViewMac）注入，这样 ClientKit 不需要
+/// 反向依赖上层的偏好管理。每次连接建立时都会取一次，所以偏好改动会在下一次连接生效。
+@property (nonatomic, copy, nullable) NSDictionary<NSString *, id> * (^inspectorSettingsProvider)(void);
+
 - (void)startScanning;
 - (void)startScanningWithConfiguration:(nullable PickViewClientConfiguration *)configuration;
 - (void)scanNow;

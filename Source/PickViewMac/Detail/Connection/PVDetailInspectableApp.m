@@ -52,6 +52,15 @@ static NSError *PVDetailUnsupportedCapabilityError(void) {
     return [self requestWithType:PVRequestTypeHierarchy payload:nil timeoutInterval:10];
 }
 
+- (RACSignal *)sendInspectorSettings:(NSDictionary<NSString *, id> *)settings {
+    if (settings.count == 0) {
+        return [RACSignal return:nil];
+    }
+    return [self requestWithType:PVRequestTypeInspectorSettings
+                          object:(id<NSSecureCoding>)settings
+                 timeoutInterval:8];
+}
+
 - (RACSignal *)submitInbuiltModification:(PVAttributeModification *)modification {
     if (![self supportsCapability:PVPeerCapabilityAttributeModification]) {
         return [RACSignal error:PVDetailUnsupportedCapabilityError()];

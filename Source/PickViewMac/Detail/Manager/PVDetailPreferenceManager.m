@@ -35,6 +35,7 @@ static NSString * const Key_CollapsedGroups = @"collapsedGroups_918";
 static NSString * const Key_PreferredExportCompression = @"preferredExportCompression";
 static NSString * const Key_CallStackType = @"callStackType";
 static NSString * const Key_SyncConsoleTarget = @"syncConsoleTarget";
+static NSString * const Key_HideFlutterBlocWidgets = @"hideFlutterBlocWidgets";
 static NSString * const Key_FreeRotation = @"FreeRotation";
 static NSString * const Key_FastMode = @"fastMode";
 static NSString * const Key_ReceivingConfigTime_Color = @"ConfigTime_Color";
@@ -93,6 +94,14 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
         }
         [self.showHiddenItems subscribe:self action:@selector(_handleShowHiddenItemsChange:) relatedObject:nil];
         
+        NSNumber *obj_hideFlutterBlocWidgets = [userDefaults objectForKey:Key_HideFlutterBlocWidgets];
+        if (obj_hideFlutterBlocWidgets != nil) {
+            _hideFlutterBlocWidgets = [obj_hideFlutterBlocWidgets boolValue];
+        } else {
+            _hideFlutterBlocWidgets = NO;
+            [userDefaults setObject:@(_hideFlutterBlocWidgets) forKey:Key_HideFlutterBlocWidgets];
+        }
+
         NSNumber *obj_enableReport = [userDefaults objectForKey:Key_EnableReport];
         if (obj_enableReport != nil) {
             _enableReport = [obj_enableReport boolValue];
@@ -214,6 +223,17 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
 - (void)_handleShowHiddenItemsChange:(PVDetailMsgActionParams *)param {
     if (self.shouldStoreToLocal) {
         [[NSUserDefaults standardUserDefaults] setObject:@(param.boolValue) forKey:Key_ShowHiddenItems];
+    }
+}
+
+- (void)setHideFlutterBlocWidgets:(BOOL)hideFlutterBlocWidgets {
+    if (_hideFlutterBlocWidgets == hideFlutterBlocWidgets) {
+        return;
+    }
+    _hideFlutterBlocWidgets = hideFlutterBlocWidgets;
+    if (self.shouldStoreToLocal) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(hideFlutterBlocWidgets)
+                                                  forKey:Key_HideFlutterBlocWidgets];
     }
 }
 
