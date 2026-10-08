@@ -56,7 +56,8 @@ static NSString *const KKFIHierarchyRequestErrorDomain =
     }
     self.started = YES;
     self.completion = [completion copy];
-    NSSet<NSString *> *excludedTypes = [excludedWidgetTypes copy];
+    NSSet<NSString *> *excludedTypes =
+        [self.class effectiveExcludedWidgetTypes:excludedWidgetTypes];
 
     __weak typeof(self) weakSelf = self;
     [self fetchRootWidgetTreeWithCompletion:^(id widgetPayload,
@@ -136,6 +137,23 @@ static NSString *const KKFIHierarchyRequestErrorDomain =
             }];
         }];
     }];
+}
+
+/// Merges the caller supplied blacklist with the Bloc widget types selected by
+/// `KKFlutterInspectorConfigure`. Bloc nodes are dropped during tree building
+/// and their children are promoted to the parent, so enabling the filter
+/// removes plumbing nodes without shifting anything that remains visible.
++ (NSSet<NSString *> *)effectiveExcludedWidgetTypes:
+    (NSSet<NSString *> *)excludedWidgetTypes {
+    NSSet<NSString *> *blocWidgetTypes =
+        KKFlutterInspectorConfigure.sharedManager.activeBlocWidgetTypes;
+    if (blocWidgetTypes.count == 0) {
+        return [excludedWidgetTypes copy];
+    }
+    NSMutableSet<NSString *> *merged =
+        [NSMutableSet setWithSet:excludedWidgetTypes ?: [NSSet set]];
+    [merged unionSet:blocWidgetTypes];
+    return [merged copy];
 }
 
 - (void)cancel {
