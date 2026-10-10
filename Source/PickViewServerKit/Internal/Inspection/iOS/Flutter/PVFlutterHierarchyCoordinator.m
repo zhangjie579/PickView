@@ -87,6 +87,334 @@ static BOOL PVFlutterExpandedElementOwnsContent(
     return element.children.count == 0 || decoration != nil;
 }
 
+/// Reads the printable value of one diagnostics property.
+static NSString *PVFlutterDiagnosticDescription(NSDictionary *property) {
+    NSString *description = [property[@"description"] isKindOfClass:NSString.class]
+        ? property[@"description"] : nil;
+    if (description.length == 0 &&
+        [property[@"value"] isKindOfClass:NSString.class]) {
+        description = property[@"value"];
+    }
+    return description;
+}
+
+/// Whether a diagnostics property carries a real value. Flutter serialises a
+/// property that is not set as the description `null`, and a `DiagnosticsNode`
+/// whose value is absent as `NSNull`.
+static BOOL PVFlutterDiagnosticPropertyHasValue(NSDictionary *property) {
+    if (property == nil || property[@"value"] == NSNull.null) return NO;
+    NSString *description = PVFlutterDiagnosticDescription(property);
+    return description.length > 0 && ![description isEqualToString:@"null"];
+}
+
+/// Whether a diagnostics payload describes a decoration that paints an image,
+/// for example `BoxDecoration(image: DecorationImage(...))`.
+///
+/// The native decoration renderer rebuilds colors, gradients, borders and
+/// corner radii, but it can never reproduce a `DecorationImage`. Such a node
+/// has to keep using a real subtree capture while it is expanded: a rebuilt
+/// decoration paints a flat rect (or nothing at all) exactly where the user
+/// expects the image. Only decoration carrying properties are descended into —
+/// `DecoratedBox` reports `bg`/`fg`, `Container` reports `bg`, and a
+/// RenderObject payload reports `decoration` — so an unrelated nested value
+/// named `image` cannot flip this on.
+static BOOL PVFlutterPropertiesPaintImage(NSArray *properties) {
+    for (id value in properties ?: @[]) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *property = (NSDictionary *)value;
+        NSString *name = [property[@"name"] isKindOfClass:NSString.class]
+            ? property[@"name"] : @"";
+        NSString *description = PVFlutterDiagnosticDescription(property);
+        BOOL isDecoration = [name isEqualToString:@"decoration"] ||
+            [name isEqualToString:@"bg"] || [name isEqualToString:@"fg"];
+        if (([name isEqualToString:@"image"] ||
+             [name isEqualToString:@"backgroundImage"]) &&
+            PVFlutterDiagnosticPropertyHasValue(property)) {
+            return YES;
+        }
+        if (isDecoration && [description containsString:@"DecorationImage"]) {
+            return YES;
+        }
+        NSArray *children = [property[@"properties"] isKindOfClass:NSArray.class]
+            ? property[@"properties"] : nil;
+        if (isDecoration && children.count > 0 &&
+            PVFlutterPropertiesPaintImage(children)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+/// Returns the `DecorationImage(...)` payload of a diagnostics description,
+/// parentheses included. Flutter prints it inline inside the decoration, for
+/// example
+/// `BoxDecoration(image: DecorationImage(NetworkImage("https://a/b.png", scale: 1.0), BoxFit.cover, Alignment.center, scale 1.0, opacity 1.0, FilterQuality.medium))`.
+static NSString *PVFlutterDecorationImagePayload(NSString *description) {
+    if (description.length == 0) return nil;
+    NSRange start = [description rangeOfString:@"DecorationImage("];
+    if (start.location == NSNotFound) return nil;
+    NSUInteger index = NSMaxRange(start);
+    NSInteger depth = 1;
+    BOOL insideLiteral = NO;
+    while (index < description.length) {
+        unichar character = [description characterAtIndex:index];
+        if (insideLiteral) {
+            if (character == '\\') index++;
+            else if (character == '"') insideLiteral = NO;
+        } else if (character == '"') {
+            insideLiteral = YES;
+        } else if (character == '(') {
+            depth++;
+        } else if (character == ')') {
+            depth--;
+            if (depth == 0) break;
+        }
+        index++;
+    }
+    if (index >= description.length) return nil;
+    return [description substringWithRange:NSMakeRange(start.location,
+                                                       index - start.location + 1)];
+}
+
+/// Reads the first capture group of a regular expression out of a description.
+static NSString *PVFlutterStringForPattern(NSString *description,
+                                           NSString *pattern) {
+    if (description.length == 0) return nil;
+    NSRegularExpression *expression =
+        [NSRegularExpression regularExpressionWithPattern:pattern
+                                                  options:0
+                                                    error:nil];
+    NSTextCheckingResult *match =
+        [expression firstMatchInString:description
+                               options:0
+                                 range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges < 2) return nil;
+    return [description substringWithRange:[match rangeAtIndex:1]];
+}
+
+/// Reads the first capture group of a regular expression as a number.
+static NSNumber *PVFlutterNumberForPattern(NSString *description,
+                                           NSString *pattern) {
+    NSString *value = PVFlutterStringForPattern(description, pattern);
+    return value.length ? @(value.doubleValue) : nil;
+}
+
+/// Reads the first `Provider("value")` pair of a description, for example
+/// `NetworkImage("https://a/b.png", scale: 1.0)`. Custom providers such as
+/// `CachedNetworkImageProvider("...")` print themselves the same way.
+static NSString *PVFlutterQuotedSourceInDescription(NSString *description,
+                                                    NSString **provider) {
+    NSString *pattern =
+        @"([A-Za-z_][A-Za-z0-9_.$]*)\\s*\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"";
+    NSRegularExpression *expression =
+        [NSRegularExpression regularExpressionWithPattern:pattern
+                                                  options:0
+                                                    error:nil];
+    NSTextCheckingResult *match =
+        [expression firstMatchInString:description
+                               options:0
+                                 range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges < 3) return nil;
+    if (provider) {
+        *provider = [description substringWithRange:[match rangeAtIndex:1]];
+    }
+    NSMutableString *value =
+        [[description substringWithRange:[match rangeAtIndex:2]] mutableCopy];
+    [value replaceOccurrencesOfString:@"\\\""
+                           withString:@"\""
+                              options:0
+                                range:NSMakeRange(0, value.length)];
+    [value replaceOccurrencesOfString:@"\\\\"
+                           withString:@"\\"
+                              options:0
+                                range:NSMakeRange(0, value.length)];
+    return value.length ? value : nil;
+}
+
+/// Reads the `Alignment` of a `DecorationImage` description. Flutter prints
+/// either a named constant or the raw offset pair.
+static CGPoint PVFlutterAlignmentFromDescription(NSString *description) {
+    NSString *named = PVFlutterStringForPattern(description,
+                                                @"Alignment\\.([a-zA-Z]+)");
+    static NSDictionary<NSString *, NSValue *> *namedAlignments;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        namedAlignments = @{
+            @"topLeft" : [NSValue valueWithCGPoint:CGPointMake(-1, -1)],
+            @"topCenter" : [NSValue valueWithCGPoint:CGPointMake(0, -1)],
+            @"topRight" : [NSValue valueWithCGPoint:CGPointMake(1, -1)],
+            @"centerLeft" : [NSValue valueWithCGPoint:CGPointMake(-1, 0)],
+            @"center" : [NSValue valueWithCGPoint:CGPointMake(0, 0)],
+            @"centerRight" : [NSValue valueWithCGPoint:CGPointMake(1, 0)],
+            @"bottomLeft" : [NSValue valueWithCGPoint:CGPointMake(-1, 1)],
+            @"bottomCenter" : [NSValue valueWithCGPoint:CGPointMake(0, 1)],
+            @"bottomRight" : [NSValue valueWithCGPoint:CGPointMake(1, 1)],
+        };
+    });
+    if (named.length) {
+        NSValue *value = namedAlignments[named];
+        return value ? value.CGPointValue : CGPointZero;
+    }
+    NSNumber *x = PVFlutterNumberForPattern(
+        description, @"Alignment\\(\\s*(-?[0-9]*\\.?[0-9]+)\\s*,");
+    NSNumber *y = PVFlutterNumberForPattern(
+        description,
+        @"Alignment\\(\\s*-?[0-9]*\\.?[0-9]+\\s*,\\s*(-?[0-9]*\\.?[0-9]+)\\s*\\)");
+    return CGPointMake(x ? x.doubleValue : 0, y ? y.doubleValue : 0);
+}
+
+/// Describes everything needed to repaint a `DecorationImage` natively.
+///
+/// Returns nil when the description carries no resolvable image source, which
+/// is the case for a `MemoryImage`: it prints only an identity hash.
+static NSDictionary *PVFlutterDecorationImageInfoFromDescription(
+    NSString *description) {
+    NSString *payload = PVFlutterDecorationImagePayload(description);
+    if (payload.length == 0) return nil;
+    NSString *provider = nil;
+    NSString *source = PVFlutterQuotedSourceInDescription(payload, &provider);
+    if (source.length == 0) {
+        // `ExactAssetImage(name: "assets/x.png", scale: 1.0, bundle: ...)`.
+        source = PVFlutterStringForPattern(
+            payload, @"name:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+    }
+    if (source.length == 0) return nil;
+    CGPoint alignment = PVFlutterAlignmentFromDescription(payload);
+    // The provider prints `scale: 1.0`, the `DecorationImage` prints
+    // `scale 1.0`; both divide the decoded pixel size.
+    NSNumber *providerScale =
+        PVFlutterNumberForPattern(payload, @"\\bscale\\s*:\\s*([0-9]*\\.?[0-9]+)");
+    NSNumber *imageScale =
+        PVFlutterNumberForPattern(payload, @"\\bscale\\s+([0-9]*\\.?[0-9]+)");
+    NSNumber *opacity =
+        PVFlutterNumberForPattern(payload, @"\\bopacity\\s+([0-9]*\\.?[0-9]+)");
+    NSString *fit = PVFlutterStringForPattern(payload, @"BoxFit\\.([a-zA-Z]+)");
+    NSString *lowercased = source.lowercaseString;
+    BOOL remote = [lowercased hasPrefix:@"http://"] ||
+        [lowercased hasPrefix:@"https://"];
+    CGFloat scale = (providerScale ? providerScale.doubleValue : 1.0) *
+                    (imageScale ? imageScale.doubleValue : 1.0);
+    if (!(scale > 0)) scale = 1;
+    CGFloat alpha = opacity ? opacity.doubleValue : 1.0;
+    return @{
+        @"source" : source,
+        @"remote" : @(remote),
+        @"provider" : provider ?: @"",
+        @"fit" : fit ?: @"scaleDown",
+        @"alignmentX" : @(alignment.x),
+        @"alignmentY" : @(alignment.y),
+        @"scale" : @(scale),
+        @"opacity" : @(MIN(MAX(alpha, 0), 1)),
+    };
+}
+
+/// Finds the diagnostics description that carries a `DecorationImage`.
+static NSString *PVFlutterDecorationImageDescriptionInProperties(
+    NSArray *properties) {
+    for (id value in properties ?: @[]) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *property = (NSDictionary *)value;
+        NSString *description = PVFlutterDiagnosticDescription(property);
+        if ([description containsString:@"DecorationImage("]) return description;
+        NSArray *children = [property[@"properties"] isKindOfClass:NSArray.class]
+            ? property[@"properties"] : nil;
+        NSString *nested =
+            PVFlutterDecorationImageDescriptionInProperties(children);
+        if (nested) return nested;
+    }
+    return nil;
+}
+
+/// Mirrors Flutter's `applyBoxFit`: returns the source sub-rect size and the
+/// destination size a `BoxFit` produces for one image inside one box.
+static void PVFlutterApplyBoxFit(NSString *fit,
+                                 CGSize inputSize,
+                                 CGSize outputSize,
+                                 CGSize *sourceSize,
+                                 CGSize *destinationSize) {
+    *sourceSize = CGSizeZero;
+    *destinationSize = CGSizeZero;
+    if (inputSize.width <= 0 || inputSize.height <= 0 ||
+        outputSize.width <= 0 || outputSize.height <= 0) {
+        return;
+    }
+    BOOL wider = outputSize.width / outputSize.height >
+                 inputSize.width / inputSize.height;
+    CGSize source = inputSize;
+    CGSize destination = outputSize;
+    if ([fit isEqualToString:@"fill"]) {
+        source = inputSize;
+        destination = outputSize;
+    } else if ([fit isEqualToString:@"contain"]) {
+        source = inputSize;
+        destination = wider
+            ? CGSizeMake(inputSize.width * outputSize.height / inputSize.height,
+                         outputSize.height)
+            : CGSizeMake(outputSize.width,
+                         inputSize.height * outputSize.width / inputSize.width);
+    } else if ([fit isEqualToString:@"cover"]) {
+        source = wider
+            ? CGSizeMake(inputSize.width,
+                         inputSize.width * outputSize.height / outputSize.width)
+            : CGSizeMake(inputSize.height * outputSize.width / outputSize.height,
+                         inputSize.height);
+        destination = outputSize;
+    } else if ([fit isEqualToString:@"fitWidth"]) {
+        if (wider) {
+            source = CGSizeMake(
+                inputSize.width,
+                inputSize.width * outputSize.height / outputSize.width);
+            destination = outputSize;
+        } else {
+            source = inputSize;
+            destination = CGSizeMake(
+                outputSize.width,
+                inputSize.height * outputSize.width / inputSize.width);
+        }
+    } else if ([fit isEqualToString:@"fitHeight"]) {
+        if (wider) {
+            source = inputSize;
+            destination = CGSizeMake(
+                inputSize.width * outputSize.height / inputSize.height,
+                outputSize.height);
+        } else {
+            source = CGSizeMake(
+                inputSize.height * outputSize.width / outputSize.height,
+                inputSize.height);
+            destination = outputSize;
+        }
+    } else if ([fit isEqualToString:@"none"]) {
+        source = CGSizeMake(MIN(inputSize.width, outputSize.width),
+                            MIN(inputSize.height, outputSize.height));
+        destination = source;
+    } else {  // scaleDown, and the default when no `BoxFit` is printed
+        source = inputSize;
+        destination = inputSize;
+        CGFloat aspectRatio = inputSize.width / inputSize.height;
+        if (destination.height > outputSize.height) {
+            destination = CGSizeMake(outputSize.height * aspectRatio,
+                                     outputSize.height);
+        }
+        if (destination.width > outputSize.width) {
+            destination = CGSizeMake(outputSize.width,
+                                     outputSize.width / aspectRatio);
+        }
+    }
+    *sourceSize = source;
+    *destinationSize = destination;
+}
+
+/// Mirrors Flutter's `Alignment.inscribe`: places `size` inside `rect`.
+static CGRect PVFlutterInscribe(CGSize size, CGRect rect, CGPoint alignment) {
+    CGFloat halfWidthDelta = (rect.size.width - size.width) / 2.0;
+    CGFloat halfHeightDelta = (rect.size.height - size.height) / 2.0;
+    return CGRectMake(rect.origin.x + halfWidthDelta +
+                          alignment.x * halfWidthDelta,
+                      rect.origin.y + halfHeightDelta +
+                          alignment.y * halfHeightDelta,
+                      size.width, size.height);
+}
+
 /// Reads one component out of a Flutter diagnostics description, for example
 /// `red:` out of `Color(alpha: 1.0000, red: 1.0000, ...)`.
 static NSNumber *PVFlutterColorComponentFromDescription(NSString *description,
@@ -163,6 +491,14 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
 /// as a full-page background draw only its own color instead of flattening the
 /// entire screen into its preview image.
 @property(nonatomic, strong, nullable) NSDictionary *resolvedDecoration;
+/// The node paints a decoration image (`DecorationImage`), which no native
+/// rebuild can reproduce. Such a node keeps using the real subtree capture
+/// while it is expanded instead of falling back to a flat rebuilt decoration.
+@property(nonatomic) BOOL paintsDecorationImage;
+/// The diagnostics description carrying the `DecorationImage(...)`. It holds
+/// the image source, `BoxFit`, alignment, scale and opacity, which together
+/// are enough to repaint the decoration's own image natively.
+@property(nonatomic, copy, nullable) NSString *decorationImageDescription;
 @end
 
 @implementation PVFlutterNodeRecord
@@ -739,19 +1075,33 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
             detail.flutterDetail = [self detailByAddingDiagnostics:properties
                                                            toDetail:detail.flutterDetail];
             record.detail = detail.flutterDetail;
-            if (record.resolvedDecoration == nil) {
-                // The Inspector returns either a property array or a payload
-                // dictionary wrapping one, exactly like -detailByAddingDiagnostics:.
-                NSArray *diagnosticProperties = @[];
-                if ([properties isKindOfClass:NSArray.class]) {
-                    diagnosticProperties = (NSArray *)properties;
-                } else if ([properties isKindOfClass:NSDictionary.class]) {
-                    NSDictionary *payload = (NSDictionary *)properties;
-                    NSArray *wrapped = payload[@"properties"];
-                    if ([wrapped isKindOfClass:NSArray.class]) {
-                        diagnosticProperties = wrapped;
-                    }
+            // The Inspector returns either a property array or a payload
+            // dictionary wrapping one, exactly like -detailByAddingDiagnostics:.
+            NSArray *diagnosticProperties = @[];
+            if ([properties isKindOfClass:NSArray.class]) {
+                diagnosticProperties = (NSArray *)properties;
+            } else if ([properties isKindOfClass:NSDictionary.class]) {
+                NSDictionary *payload = (NSDictionary *)properties;
+                NSArray *wrapped = payload[@"properties"];
+                if ([wrapped isKindOfClass:NSArray.class]) {
+                    diagnosticProperties = wrapped;
                 }
+            }
+            // A decoration image can never be rebuilt natively, so it has to be
+            // detected even when the pass below already resolved a color from
+            // the same payload: `BoxDecoration(color: ..., image: ...)` yields
+            // both, and the color alone would still hide the image.
+            if (!record.paintsDecorationImage &&
+                PVFlutterPropertiesPaintImage(diagnosticProperties)) {
+                record.paintsDecorationImage = YES;
+                record.resolvedDecoration = nil;
+            }
+            if (record.decorationImageDescription == nil) {
+                record.decorationImageDescription =
+                    PVFlutterDecorationImageDescriptionInProperties(
+                        diagnosticProperties);
+            }
+            if (record.resolvedDecoration == nil) {
                 record.resolvedDecoration =
                     [self decorationFromDiagnosticProperties:diagnosticProperties];
                 NSMutableArray<NSString *> *names = [NSMutableArray array];
@@ -768,10 +1118,11 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                     }
                 }
                 NSLog(@"PV_FLUTTER_DECORATION widget=%@ renderObject=%@ count=%@ "
-                      @"resolved=%d names=%@",
+                      @"resolved=%d image=%d names=%@",
                       record.element.widgetType, record.element.renderObjectType,
                       @(diagnosticProperties.count),
                       record.resolvedDecoration != nil,
+                      record.paintsDecorationImage,
                       [names componentsJoinedByString:@", "]);
             }
         }
@@ -825,19 +1176,20 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
 - (void)logPreviewDecision:(NSString *)decision
                       task:(PVStaticAsyncUpdateTask *)task
                     record:(PVFlutterNodeRecord *)record {
-//    if (!decision.length) return;
-//    KKFIInspectorElement *element = record.element;
-//    NSLog(@"PV_FLUTTER_PREVIEW widget=%@ renderObject=%@ paintRole=%@ strategy=%@ "
-//          @"children=%@ hasFrame=%d proxy=%d decoration=%d resolved=%d frame=%@ task=%@ -> %@",
-//          element.widgetType, element.renderObjectType, element.paintRole,
-//          element.renderStrategy, @(element.children.count), element.hasFrame,
-//          [record.page isProxyElement:element], element.nativeDecoration != nil,
-//          record.resolvedDecoration != nil,
-//          NSStringFromCGRect(element.frame),
-//          task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot ? @"solo"
-//              : (task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot
-//                     ? @"group" : @"none"),
-//          decision);
+    if (!decision.length) return;
+    KKFIInspectorElement *element = record.element;
+    NSLog(@"PV_FLUTTER_PREVIEW widget=%@ renderObject=%@ paintRole=%@ strategy=%@ "
+          @"children=%@ hasFrame=%d proxy=%d decoration=%d resolved=%d image=%d "
+          @"frame=%@ task=%@ -> %@",
+          element.widgetType, element.renderObjectType, element.paintRole,
+          element.renderStrategy, @(element.children.count), element.hasFrame,
+          [record.page isProxyElement:element], element.nativeDecoration != nil,
+          record.resolvedDecoration != nil, record.paintsDecorationImage,
+          NSStringFromCGRect(element.frame),
+          task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot ? @"solo"
+              : (task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot
+                     ? @"group" : @"none"),
+          decision);
 }
 
 - (void)captureForTask:(PVStaticAsyncUpdateTask *)task
@@ -872,7 +1224,45 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
     }
     NSDictionary *decoration =
         element.nativeDecoration ?: record.resolvedDecoration;
-    if (isSolo && !PVFlutterExpandedElementOwnsContent(element, decoration)) {
+    /// A decoration that paints a `DecorationImage` owns real pixels, but no
+    /// rebuild can reproduce them: the reconstructed image only knows color,
+    /// gradient, border and radius, so while expanded the row showed a flat
+    /// rect (or stayed empty) exactly where the image belongs. Such a node is
+    /// repainted from the image source instead (see below). Drop any decoration
+    /// rebuilt from the same payload, since a
+    /// `BoxDecoration(color:..., image:...)` also resolves a color that would
+    /// cover the image up.
+    BOOL paintsOwnImage = record.paintsDecorationImage;
+    if (paintsOwnImage) {
+        decoration = nil;
+    }
+    if (isSolo && paintsOwnImage && element.children.count > 0) {
+        // A `DecorationImage` is this node's own background, but an Inspector
+        // screenshot always flattens the whole render subtree, so the expanded
+        // row used to paint its children's pixels a second time on top of the
+        // rows that already draw themselves. Repaint the image source instead
+        // and let the children keep drawing themselves.
+        [self captureDecorationImageForTask:task
+                                     record:record
+                                     detail:detail
+                            lowImageQuality:lowImageQuality
+                                 completion:^(BOOL painted) {
+            if (painted) {
+                completion();
+                return;
+            }
+            // No resolvable source (a `MemoryImage`, for instance): keep the
+            // subtree capture rather than leaving the row empty.
+            [self captureSubtreeForTask:task
+                                 record:record
+                                 detail:detail
+                        lowImageQuality:lowImageQuality
+                             completion:completion];
+        }];
+        return;
+    }
+    if (isSolo && !paintsOwnImage &&
+        !PVFlutterExpandedElementOwnsContent(element, decoration)) {
         // Expanded: descendants already draw their own content, so an ancestor
         // must not flatten them into another full subtree image and stack the
         // same pixels on top of each other.
@@ -880,7 +1270,7 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
         completion();
         return;
     }
-    if (isSolo && element.children.count > 0) {
+    if (isSolo && element.children.count > 0 && !paintsOwnImage) {
         // An Inspector screenshot always contains the complete render subtree.
         // For an expanded parent, only keep a reconstructed decoration and let
         // visible children provide their own screenshots. A page-sized
@@ -902,7 +1292,7 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
         completion();
         return;
     }
-    if (isSolo) {
+    if (isSolo && element.children.count == 0) {
         // 已展开的叶子节点：只画自己这一层，没有可绘制内容就保持空白
         if (!element.captureEligible && decoration == nil) {
             [self logPreviewDecision:@"skipNotEligible" task:task record:record];
@@ -916,6 +1306,21 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
         completion();
         return;
     }
+    [self captureSubtreeForTask:task
+                         record:record
+                         detail:detail
+                lowImageQuality:lowImageQuality
+                     completion:completion];
+}
+
+/// Takes the real Inspector screenshot, which always contains the complete
+/// render subtree.
+- (void)captureSubtreeForTask:(PVStaticAsyncUpdateTask *)task
+                       record:(PVFlutterNodeRecord *)record
+                       detail:(PVDisplayItemDetail *)detail
+              lowImageQuality:(BOOL)lowImageQuality
+                   completion:(dispatch_block_t)completion {
+    KKFIInspectorElement *element = record.element;
     [self logPreviewDecision:task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot
                                  ? @"captureSolo" : @"captureGroup"
                         task:task
@@ -953,6 +1358,201 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                   element.renderStrategy, error);
         }
         completion();
+    }];
+}
+
+/// Repaints a node's own `DecorationImage` and uses it as the expanded preview.
+///
+/// An Inspector screenshot always contains the complete render subtree, so for
+/// a `DecoratedBox` whose decoration paints an image it also carries every
+/// child — pixels the child rows already draw themselves. Repainting the image
+/// source keeps the row's own background and nothing else.
+- (void)captureDecorationImageForTask:(PVStaticAsyncUpdateTask *)task
+                               record:(PVFlutterNodeRecord *)record
+                               detail:(PVDisplayItemDetail *)detail
+                      lowImageQuality:(BOOL)lowImageQuality
+                           completion:(void (^)(BOOL painted))completion {
+    KKFIInspectorElement *element = record.element;
+    NSDictionary *info = PVFlutterDecorationImageInfoFromDescription(
+        record.decorationImageDescription);
+    NSString *source = [info[@"source"] isKindOfClass:NSString.class]
+        ? info[@"source"] : nil;
+    if (source.length == 0) {
+        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ renderObject=%@ "
+              @"description=%@ -> noResolvableSource",
+              element.widgetType, element.renderObjectType,
+              record.decorationImageDescription);
+        completion(NO);
+        return;
+    }
+    [self loadDecorationImageWithInfo:info
+                           completion:^(UIImage *image) {
+        if (!image) {
+            NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ "
+                  @"source=%@ -> loadFailed",
+                  element.widgetType, info[@"provider"], source);
+            completion(NO);
+            return;
+        }
+        CGFloat displayScale =
+            MAX(record.page.hostView.traitCollection.displayScale, 1);
+        UIImage *painted = [self imageByPaintingDecorationImage:image
+                                                           info:info
+                                                           size:element.frame.size
+                                                  displayScale:displayScale];
+        if (!painted) {
+            completion(NO);
+            return;
+        }
+        [self logPreviewDecision:@"decorationImageRepainted" task:task record:record];
+        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ source=%@ "
+              @"fit=%@ scale=%@ opacity=%@ -> %@",
+              element.widgetType, info[@"provider"], source, info[@"fit"],
+              info[@"scale"], info[@"opacity"],
+              NSStringFromCGSize(painted.size));
+        detail.soloImageData = UIImagePNGRepresentation(painted);
+        detail.soloScreenshot = painted;
+        completion(YES);
+    }];
+}
+
+/// Loads the image a `DecorationImage` points at. Network sources are fetched
+/// again by the host app; Flutter's own image cache is not reachable natively.
+- (void)loadDecorationImageWithInfo:(NSDictionary *)info
+                         completion:(void (^)(UIImage *image))completion {
+    NSString *source = info[@"source"];
+    if ([info[@"remote"] boolValue]) {
+        NSURL *url = [NSURL URLWithString:source];
+        if (!url) {
+            completion(nil);
+            return;
+        }
+        NSURLRequest *request =
+            [NSURLRequest requestWithURL:url
+                             cachePolicy:NSURLRequestReturnCacheDataElseLoad
+                         timeoutInterval:10];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request
+                    completionHandler:^(NSData *data, NSURLResponse *response,
+                                        NSError *error) {
+            UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(image); });
+        }] resume];
+        return;
+    }
+    NSString *path = [self localPathForDecorationImageSource:source];
+    completion(path.length ? [UIImage imageWithContentsOfFile:path] : nil);
+}
+
+/// Resolves an `AssetImage` / `FileImage` source to a file on disk. Flutter
+/// ships its assets inside `App.framework/flutter_assets`, keyed by the name
+/// the Dart code asked for.
+- (NSString *)localPathForDecorationImageSource:(NSString *)source {
+    NSFileManager *manager = NSFileManager.defaultManager;
+    if ([source hasPrefix:@"/"] && [manager fileExistsAtPath:source]) {
+        return source;
+    }
+    NSBundle *bundle = NSBundle.mainBundle;
+    NSString *resourceRoot = bundle.resourcePath;
+    NSArray<NSString *> *roots = @[
+        resourceRoot,
+        [resourceRoot stringByAppendingPathComponent:@"flutter_assets"],
+        [resourceRoot stringByAppendingPathComponent:
+            @"Frameworks/App.framework/flutter_assets"],
+        [bundle.bundlePath stringByAppendingPathComponent:@"flutter_assets"],
+    ];
+    for (NSString *root in roots) {
+        NSString *candidate = [root stringByAppendingPathComponent:source];
+        if ([manager fileExistsAtPath:candidate]) return candidate;
+    }
+    // `-[NSBundle pathForResource:ofType:inDirectory:]` additionally resolves
+    // the asset through the bundle's own lookup tables, which covers asset
+    // keys that were renamed while building the app.
+    NSArray<NSString *> *relativeRoots = @[
+        @"",
+        @"flutter_assets",
+        @"Frameworks/App.framework/flutter_assets",
+    ];
+    NSString *directory = source.stringByDeletingLastPathComponent;
+    NSString *name = source.lastPathComponent;
+    for (NSString *root in relativeRoots) {
+        NSString *scope = directory.length
+            ? [root stringByAppendingPathComponent:directory] : root;
+        NSString *resolved = [bundle pathForResource:name
+                                             ofType:nil
+                                        inDirectory:scope.length ? scope : nil];
+        if (resolved.length && [manager fileExistsAtPath:resolved]) return resolved;
+    }
+    return nil;
+}
+
+/// Draws a decoration image into `size` the way Flutter would: `applyBoxFit`
+/// picks the source sub-rect, then the alignment places it inside the box.
+- (UIImage *)imageByPaintingDecorationImage:(UIImage *)source
+                                       info:(NSDictionary *)info
+                                       size:(CGSize)size
+                               displayScale:(CGFloat)displayScale {
+    if (!source || size.width <= 0 || size.height <= 0) return nil;
+    CGImageRef full = source.CGImage;
+    if (!full) return nil;
+    CGFloat scale = [info[@"scale"] doubleValue];
+    if (!(scale > 0)) scale = 1;
+    /// Flutter feeds `applyBoxFit` the image size already divided by the scale.
+    CGSize inputSize = CGSizeMake(CGImageGetWidth(full) / scale,
+                                  CGImageGetHeight(full) / scale);
+    if (inputSize.width <= 0 || inputSize.height <= 0) return nil;
+    NSString *fit = [info[@"fit"] isKindOfClass:NSString.class]
+        ? info[@"fit"] : @"scaleDown";
+    CGSize sourceSize = CGSizeZero;
+    CGSize destinationSize = CGSizeZero;
+    PVFlutterApplyBoxFit(fit, inputSize, size, &sourceSize, &destinationSize);
+    if (sourceSize.width <= 0 || sourceSize.height <= 0 ||
+        destinationSize.width <= 0 || destinationSize.height <= 0) {
+        return nil;
+    }
+    CGPoint alignment = CGPointMake([info[@"alignmentX"] doubleValue],
+                                    [info[@"alignmentY"] doubleValue]);
+    /// Flutter centres the source sub-rect, then aligns the destination.
+    CGRect inputRect = PVFlutterInscribe(sourceSize,
+                                         (CGRect){CGPointZero, inputSize},
+                                         CGPointZero);
+    CGRect outputRect = PVFlutterInscribe(destinationSize,
+                                          (CGRect){CGPointZero, size},
+                                          alignment);
+    CGFloat alpha = [info[@"opacity"] doubleValue];
+    UIGraphicsImageRendererFormat *format =
+        [UIGraphicsImageRendererFormat defaultFormat];
+    format.opaque = NO;
+    format.scale = MIN(MAX(displayScale, 2), 3);
+    UIGraphicsImageRenderer *renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        if (source.imageOrientation != UIImageOrientationUp) {
+            // Cropping operates on raw pixels, which an oriented image does not
+            // describe; fall back to drawing the whole image fitted to the box.
+            [source drawInRect:outputRect
+                     blendMode:kCGBlendModeNormal
+                         alpha:MAX(MIN(alpha, 1), 0)];
+            return;
+        }
+        /// Back from logical units to decoded pixels: `inputRect` lives in the
+        /// scaled-down space `applyBoxFit` was fed.
+        CGRect pixelRect = CGRectMake(inputRect.origin.x * scale,
+                                      inputRect.origin.y * scale,
+                                      inputRect.size.width * scale,
+                                      inputRect.size.height * scale);
+        pixelRect = CGRectIntersection(
+            pixelRect, CGRectMake(0, 0, CGImageGetWidth(full),
+                                  CGImageGetHeight(full)));
+        if (CGRectIsEmpty(pixelRect) || CGRectIsNull(pixelRect)) return;
+        CGImageRef cropped = CGImageCreateWithImageInRect(full, pixelRect);
+        if (!cropped) return;
+        UIImage *piece = [UIImage imageWithCGImage:cropped
+                                            scale:1
+                                      orientation:UIImageOrientationUp];
+        CGImageRelease(cropped);
+        [piece drawInRect:outputRect
+                blendMode:kCGBlendModeNormal
+                    alpha:MAX(MIN(alpha, 1), 0)];
     }];
 }
 
