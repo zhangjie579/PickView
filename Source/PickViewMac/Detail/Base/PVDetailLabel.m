@@ -21,7 +21,7 @@
         [self setBezeled:NO];
         [self setDrawsBackground:YES];
         [self setEditable:NO];
-        [self setSelectable:NO];
+        [self setSelectable:YES];
         
         [self _updateColors];
     }
