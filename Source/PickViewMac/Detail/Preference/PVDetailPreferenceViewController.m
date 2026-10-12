@@ -73,7 +73,7 @@
     };
     [self.view addSubview:self.view_enableLog];
 
-    self.view_hideFlutterBloc = [[PVDetailPreferenceSwitchView alloc] initWithTitle:NSLocalizedString(@"Hide Flutter Bloc widgets", nil) message:NSLocalizedString(@"Hide flutter_bloc widgets such as BlocProvider and BlocBuilder. Their children stay in place.", nil)];
+    self.view_hideFlutterBloc = [[PVDetailPreferenceSwitchView alloc] initWithTitle:NSLocalizedString(@"隐藏非UI的widget", nil) message:NSLocalizedString(@"隐藏非UI的widget such as BlocProvider and BlocBuilder. Their children stay in place.", nil)];
     self.view_hideFlutterBloc.didChange = ^(BOOL isChecked) {
         PVDetailPreferenceManager *manager = [PVDetailPreferenceManager mainManager];
         // renderFromPreferenceManager also assigns isChecked, which fires this
