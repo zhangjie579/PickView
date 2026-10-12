@@ -28,6 +28,56 @@
             @"MultiBlocListener",
             @"MultiRepositoryProvider",
             @"BlocEffectListener",
+            
+            // 数据与环境传递
+            @"InheritedWidget",
+            @"InheritedModel",
+            @"InheritedNotifier",
+            @"DefaultTextStyle",
+            @"Directionality",
+            @"MediaQuery",
+            @"Localizations",
+            @"Theme",
+            @"Provider",
+
+            // 状态与异步更新
+            @"Builder",
+            @"StatefulBuilder",
+            @"ValueListenableBuilder",
+            @"ListenableBuilder",
+            @"AnimatedBuilder",
+            @"StreamBuilder",
+            @"FutureBuilder",
+
+            // 事件与交互
+//            @"GestureDetector",
+//            @"RawGestureDetector",
+            @"Listener",
+            @"NotificationListener",
+            @"MouseRegion",
+            @"Focus",
+            @"FocusScope",
+            @"Shortcuts",
+            @"Actions",
+            @"CallbackShortcuts",
+            @"DragTarget",
+//            @"IgnorePointer",
+//            @"AbsorbPointer",
+
+            // 生命周期与构建控制
+//            @"Visibility",
+//            @"Offstage",
+            @"TickerMode",
+            @"RepaintBoundary",
+            @"KeyedSubtree",
+            @"AutomaticKeepAlive",
+            @"KeepAlive",
+            @"SliverLayoutBuilder",
+
+            // 布局约束
+            @"LayoutBuilder",
+            @"OrientationBuilder",
+            @"SafeArea",
         ]];
     });
     return defaultTypes;
