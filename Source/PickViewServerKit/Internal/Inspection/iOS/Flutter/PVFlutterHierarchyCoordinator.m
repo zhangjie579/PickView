@@ -685,8 +685,8 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
         : @[[self displayItemForElement:snapshot.rootElement page:page]];
     [self.pagesByHostView setObject:page forKey:hostView];
     [self.pagesByHostLayer setObject:page forKey:hostView.layer];
-    NSLog(@"PV_FLUTTER_HIERARCHY_PREPARED hostView=%@ snapshot=%@ rootItems=%@",
-          hostView, snapshot.snapshotID, @(page.rootItems.count));
+//    NSLog(@"PV_FLUTTER_HIERARCHY_PREPARED hostView=%@ snapshot=%@ rootItems=%@",
+//          hostView, snapshot.snapshotID, @(page.rootItems.count));
 }
 
 // Marks every element whose render object actually belongs to one of its
@@ -1117,13 +1117,13 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                                               ? description : @""]];
                     }
                 }
-                NSLog(@"PV_FLUTTER_DECORATION widget=%@ renderObject=%@ count=%@ "
-                      @"resolved=%d image=%d names=%@",
-                      record.element.widgetType, record.element.renderObjectType,
-                      @(diagnosticProperties.count),
-                      record.resolvedDecoration != nil,
-                      record.paintsDecorationImage,
-                      [names componentsJoinedByString:@", "]);
+//                NSLog(@"PV_FLUTTER_DECORATION widget=%@ renderObject=%@ count=%@ "
+//                      @"resolved=%d image=%d names=%@",
+//                      record.element.widgetType, record.element.renderObjectType,
+//                      @(diagnosticProperties.count),
+//                      record.resolvedDecoration != nil,
+//                      record.paintsDecorationImage,
+//                      [names componentsJoinedByString:@", "]);
             }
         }
         capture();
@@ -1176,20 +1176,20 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
 - (void)logPreviewDecision:(NSString *)decision
                       task:(PVStaticAsyncUpdateTask *)task
                     record:(PVFlutterNodeRecord *)record {
-    if (!decision.length) return;
-    KKFIInspectorElement *element = record.element;
-    NSLog(@"PV_FLUTTER_PREVIEW widget=%@ renderObject=%@ paintRole=%@ strategy=%@ "
-          @"children=%@ hasFrame=%d proxy=%d decoration=%d resolved=%d image=%d "
-          @"frame=%@ task=%@ -> %@",
-          element.widgetType, element.renderObjectType, element.paintRole,
-          element.renderStrategy, @(element.children.count), element.hasFrame,
-          [record.page isProxyElement:element], element.nativeDecoration != nil,
-          record.resolvedDecoration != nil, record.paintsDecorationImage,
-          NSStringFromCGRect(element.frame),
-          task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot ? @"solo"
-              : (task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot
-                     ? @"group" : @"none"),
-          decision);
+//    if (!decision.length) return;
+//    KKFIInspectorElement *element = record.element;
+//    NSLog(@"PV_FLUTTER_PREVIEW widget=%@ renderObject=%@ paintRole=%@ strategy=%@ "
+//          @"children=%@ hasFrame=%d proxy=%d decoration=%d resolved=%d image=%d "
+//          @"frame=%@ task=%@ -> %@",
+//          element.widgetType, element.renderObjectType, element.paintRole,
+//          element.renderStrategy, @(element.children.count), element.hasFrame,
+//          [record.page isProxyElement:element], element.nativeDecoration != nil,
+//          record.resolvedDecoration != nil, record.paintsDecorationImage,
+//          NSStringFromCGRect(element.frame),
+//          task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot ? @"solo"
+//              : (task.taskType == PVStaticAsyncUpdateTaskTypeGroupScreenshot
+//                     ? @"group" : @"none"),
+//          decision);
 }
 
 - (void)captureForTask:(PVStaticAsyncUpdateTask *)task
@@ -1346,16 +1346,16 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                 detail.groupImageData = result.pngData;
                 detail.groupScreenshot = result.image;
             }
-            NSLog(@"PV_FLUTTER_SCREENSHOT_OK widget=%@ renderObject=%@ task=%@ "
-                  @"image=%@ bytes=%@",
-                  element.widgetType, element.renderObjectType,
-                  task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot
-                      ? @"solo" : @"group",
-                  NSStringFromCGSize(result.image.size), @(result.pngData.length));
+//            NSLog(@"PV_FLUTTER_SCREENSHOT_OK widget=%@ renderObject=%@ task=%@ "
+//                  @"image=%@ bytes=%@",
+//                  element.widgetType, element.renderObjectType,
+//                  task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot
+//                      ? @"solo" : @"group",
+//                  NSStringFromCGSize(result.image.size), @(result.pngData.length));
         } else {
-            NSLog(@"PV_FLUTTER_SCREENSHOT_FAILED objectID=%@ widget=%@ strategy=%@ error=%@",
-                  element.reference.objectID, element.widgetType,
-                  element.renderStrategy, error);
+//            NSLog(@"PV_FLUTTER_SCREENSHOT_FAILED objectID=%@ widget=%@ strategy=%@ error=%@",
+//                  element.reference.objectID, element.widgetType,
+//                  element.renderStrategy, error);
         }
         completion();
     }];
@@ -1378,19 +1378,19 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
     NSString *source = [info[@"source"] isKindOfClass:NSString.class]
         ? info[@"source"] : nil;
     if (source.length == 0) {
-        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ renderObject=%@ "
-              @"description=%@ -> noResolvableSource",
-              element.widgetType, element.renderObjectType,
-              record.decorationImageDescription);
+//        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ renderObject=%@ "
+//              @"description=%@ -> noResolvableSource",
+//              element.widgetType, element.renderObjectType,
+//              record.decorationImageDescription);
         completion(NO);
         return;
     }
     [self loadDecorationImageWithInfo:info
                            completion:^(UIImage *image) {
         if (!image) {
-            NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ "
-                  @"source=%@ -> loadFailed",
-                  element.widgetType, info[@"provider"], source);
+//            NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ "
+//                  @"source=%@ -> loadFailed",
+//                  element.widgetType, info[@"provider"], source);
             completion(NO);
             return;
         }
@@ -1405,11 +1405,11 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
             return;
         }
         [self logPreviewDecision:@"decorationImageRepainted" task:task record:record];
-        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ source=%@ "
-              @"fit=%@ scale=%@ opacity=%@ -> %@",
-              element.widgetType, info[@"provider"], source, info[@"fit"],
-              info[@"scale"], info[@"opacity"],
-              NSStringFromCGSize(painted.size));
+//        NSLog(@"PV_FLUTTER_DECORATION_IMAGE widget=%@ provider=%@ source=%@ "
+//              @"fit=%@ scale=%@ opacity=%@ -> %@",
+//              element.widgetType, info[@"provider"], source, info[@"fit"],
+//              info[@"scale"], info[@"opacity"],
+//              NSStringFromCGSize(painted.size));
         detail.soloImageData = UIImagePNGRepresentation(painted);
         detail.soloScreenshot = painted;
         completion(YES);

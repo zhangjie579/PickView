@@ -1667,8 +1667,8 @@
     }
     if (flutterItems.count) {
         item.flutterLoadState = PVFlutterLoadStateLoaded;
-        NSLog(@"PV_FLUTTER_HIERARCHY_ATTACHED layer=%@ view=%@ rootItems=%@",
-              layer, view, @(flutterItems.count));
+//        NSLog(@"PV_FLUTTER_HIERARCHY_ATTACHED layer=%@ view=%@ rootItems=%@",
+//              layer, view, @(flutterItems.count));
         [children addObjectsFromArray:flutterItems];
     } else if (isFlutterHost) {
         // Return the normal UIKit hierarchy immediately with the Flutter host
