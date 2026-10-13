@@ -1468,6 +1468,7 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
             [self addSubview:prefixLabel];
             [prefixes addObject:prefixLabel];
             PVDetailLabel *typeLabel = [PVDetailLabel new];
+            typeLabel.selectable = YES;
             typeLabel.font = NSFontMake(PVFlutterInfoFontSize);
             typeLabel.textColor = NSColor.labelColor;
             typeLabel.maximumNumberOfLines = 0;
