@@ -50,6 +50,17 @@ typedef NS_ENUM(NSInteger, PVMeasureState) {
 /// 仅在 macOS 10.14 及以后上生效
 @property(nonatomic, assign) PVPreferredAppearanceType appearanceType;
 
+/// 把 appearanceType 真正应用到 NSApp 上。
+///
+/// appearanceType 的 setter 只会写 UserDefaults，如果不调用这个方法，Preferences 里的
+/// Appearance 下拉框就是一个死开关 —— 界面永远跟随系统。AppKit 里 NSApplication 遵循
+/// NSAppearanceCustomization：给它一个具体的 NSAppearance，所有 appearance 为 nil 的
+/// window / view 都会继承它并触发 viewDidChangeEffectiveAppearance 级联；给 nil 表示
+/// 恢复跟随系统。
+///
+/// 需要在主线程调用（内部已做保护）。启动时要在创建任何窗口之前调用一次。
+- (void)applyAppearance;
+
 @property(nonatomic, assign) PVDoubleClickBehavior doubleClickBehavior;
 
 /// 有效值为 0 ～ 4

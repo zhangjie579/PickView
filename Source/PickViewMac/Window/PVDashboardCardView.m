@@ -7,6 +7,8 @@
 
 #import "PVDashboardCardView.h"
 
+#import "NSView+PVClient.h"
+
 static CGFloat const PVDashboardCardCornerRadius = 6.0;
 static CGFloat const PVDashboardCardHorizontalInset = 12.0;
 
@@ -121,7 +123,7 @@ static CGFloat const PVDashboardCardHorizontalInset = 12.0;
     NSView *view = [[NSView alloc] init];
     view.translatesAutoresizingMaskIntoConstraints = NO;
     view.wantsLayer = YES;
-    view.layer.backgroundColor = NSColor.separatorColor.CGColor;
+    [view pv_setLayerBackgroundColor:NSColor.separatorColor];
     [view.heightAnchor constraintEqualToConstant:1.0].active = YES;
     return view;
 }

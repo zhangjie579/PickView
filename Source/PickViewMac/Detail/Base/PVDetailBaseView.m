@@ -7,6 +7,7 @@
 
 #import "PVDetailPrefix.h"
 #import "PVDetailBaseView.h"
+#import "NSView+PVClient.h"
 
 @interface PVDetailBaseView ()
 
@@ -36,7 +37,12 @@
 
 - (void)setBackgroundColor:(NSColor *)backgroundColor {
     _backgroundColor = backgroundColor;
-    self.layer.backgroundColor = backgroundColor.CGColor;
+    /// 不能直接写 `self.layer.backgroundColor = backgroundColor.CGColor`：
+    /// CGColor 是赋值那一刻按当前外观解析出的静态快照，之后用户切深/浅色
+    /// （或跟随系统时系统外观变化）它都不会重解析 —— 右侧 Flutter 检查面板
+    /// 标签栏那条「切不亮的深色底」就是这里漏出来的。
+    /// 走绑定式接口，外观变化时由 applyAppearance 的全局刷新重新求值。
+    [self pv_setLayerBackgroundColor:backgroundColor];
 }
 
 - (void)setBackgroundColors:(PVDetailTwoColors *)backgroundColors {

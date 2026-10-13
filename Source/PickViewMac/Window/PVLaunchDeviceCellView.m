@@ -10,6 +10,7 @@
 #import "PVClientSession.h"
 #import "PVEndpointProtocol.h"
 #import "PVPeerIdentity.h"
+#import "NSView+PVClient.h"
 
 static NSSize const PVLaunchPhonePreviewSize = {142.0, 260.0};
 static NSSize const PVLaunchMacPreviewSize = {400.0, 260.0};
@@ -48,7 +49,7 @@ static CGFloat const PVLaunchDeviceIconTextSpacing = 8.0;
         _previewImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
         _previewImageView.wantsLayer = YES;
         _previewImageView.layer.cornerRadius = 8;
-        _previewImageView.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+        [_previewImageView pv_setLayerBackgroundColor:NSColor.controlBackgroundColor];
         [self addSubview:_previewImageView];
 
         _iconImageView = [[NSImageView alloc] init];

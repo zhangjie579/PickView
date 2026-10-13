@@ -10,6 +10,7 @@
 #import "PVSplitView.h"
 #import "PVDashboardCardView.h"
 #import "PVPreviewSceneView.h"
+#import "NSView+PVClient.h"
 
 static CGFloat const PVWorkspaceHierarchyWidth = 350.0;
 static CGFloat const PVWorkspaceHierarchyMinWidth = 200.0;
@@ -41,7 +42,7 @@ static CGFloat const PVWorkspaceSearchHeight = 25.0;
 - (void)loadView {
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1000, 700)];
     view.wantsLayer = YES;
-    view.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+    [view pv_setLayerBackgroundColor:NSColor.controlBackgroundColor];
     self.view = view;
     [self buildViews];
 }
@@ -120,12 +121,12 @@ static CGFloat const PVWorkspaceSearchHeight = 25.0;
 }
 
 - (void)buildPreviewAndDashboardInView:(NSView *)containerView {
-    self.splitTopView = [self plainContainerViewWithColor:NSColor.whiteColor];
+    self.splitTopView = [self plainContainerViewWithColor:NSColor.textBackgroundColor];
     [containerView addSubview:self.splitTopView];
 
     NSView *dashboardView = [self plainContainerViewWithColor:NSColor.windowBackgroundColor];
     dashboardView.wantsLayer = YES;
-    dashboardView.layer.borderColor = NSColor.separatorColor.CGColor;
+    [dashboardView pv_setLayerBorderColor:NSColor.separatorColor];
     dashboardView.layer.borderWidth = 1.0;
     [self.splitTopView addSubview:dashboardView];
 
@@ -217,7 +218,7 @@ static CGFloat const PVWorkspaceSearchHeight = 25.0;
     NSView *view = [[NSView alloc] init];
     view.translatesAutoresizingMaskIntoConstraints = NO;
     view.wantsLayer = YES;
-    view.layer.backgroundColor = color.CGColor;
+    [view pv_setLayerBackgroundColor:color];
     return view;
 }
 
@@ -251,7 +252,7 @@ static CGFloat const PVWorkspaceSearchHeight = 25.0;
     view.translatesAutoresizingMaskIntoConstraints = NO;
     view.wantsLayer = YES;
     view.layer.borderWidth = 1.0;
-    view.layer.borderColor = NSColor.separatorColor.CGColor;
+    [view pv_setLayerBorderColor:NSColor.separatorColor];
 
     NSImageView *iconView = [[NSImageView alloc] init];
     iconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -285,7 +286,7 @@ static CGFloat const PVWorkspaceSearchHeight = 25.0;
     view.wantsLayer = YES;
     view.layer.cornerRadius = 6.0;
     view.layer.borderWidth = 1.0;
-    view.layer.borderColor = NSColor.separatorColor.CGColor;
+    [view pv_setLayerBorderColor:NSColor.separatorColor];
 
     NSImageView *iconView = [[NSImageView alloc] init];
     iconView.translatesAutoresizingMaskIntoConstraints = NO;

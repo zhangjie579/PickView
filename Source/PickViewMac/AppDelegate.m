@@ -8,6 +8,7 @@
 #import "AppDelegate.h"
 
 #import "PVClientWindowController.h"
+#import "PVDetailPreferenceManager.h"
 
 @interface AppDelegate ()
 
@@ -19,6 +20,10 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [self pv_installEditMenu];
+    // Preferences 里的 Appearance（Dark / Light / System）写进 UserDefaults 之后，
+    // 只有这里会把它真正作用到 NSApp 上。必须在创建任何窗口之前调用，
+    // 否则窗口建好时用的还是系统的外观。
+    [[PVDetailPreferenceManager mainManager] applyAppearance];
     self.clientWindowController = [[PVClientWindowController alloc] init];
     [self.clientWindowController start];
 }

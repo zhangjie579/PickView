@@ -12,6 +12,7 @@
 #import "PVDashboardBlueprint.h"
 #import "PVDetailPreviewView.h"
 #import "PVDetailTutorialManager.h"
+#import "NSView+PVClient.h"
 
 NSString *const NotificationName_DidChangeSectionShowing = @"NotificationName_DidChangeSectionShowing";
 
@@ -65,9 +66,18 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
         _previewDimension = [PVDetailIntegerMsgAttribute attributeWithInteger:PVPreviewDimension3D];
         _measureState = [PVDetailIntegerMsgAttribute attributeWithInteger:PVMeasureState_no];
         _isQuickSelecting = [PVDetailBOOLMsgAttribute attributeWithBOOL:NO];
-        
+
         NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-        
+
+        // Appearance 为 System（NSApp.appearance = nil）时，系统外观变化不会走
+        // setAppearanceType:，但 layer 上的静态 CGColor 快照同样需要重解析，
+        // 这里统一借 applyAppearance 的全局刷新兜一遍。固定 Dark/Light 时
+        // effectiveAppearance 不会变，重复执行是无害的。
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(applyAppearance)
+                                                     name:@"NSApplicationDidChangeEffectiveAppearanceNotification"
+                                                   object:nil];
+
         // 如果本次 PickView 客户端的 version 和上次不同，则该变量会被置为 YES
 //        BOOL clientVersionHasChanged = NO;
         NSInteger prevClientVersion = [userDefaults integerForKey:Key_PreviousClientVersion];
@@ -273,6 +283,65 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
     _appearanceType = appearanceType;
     if (self.shouldStoreToLocal) {
         [[NSUserDefaults standardUserDefaults] setObject:@(appearanceType) forKey:Key_AppearanceType];
+    }
+    [self applyAppearance];
+}
+
+#pragma mark - Appearance
+
+- (NSAppearance *)pv_appearanceForPreferredType {
+    switch (self.appearanceType) {
+        case PVPreferredAppearanceTypeDark:
+            return [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        case PVPreferredAppearanceTypeLight:
+            return [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        case PVPreferredAppearanceTypeSystem:
+            // nil 表示跟随系统
+            return nil;
+    }
+    return nil;
+}
+
+- (void)applyAppearance {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self applyAppearance];
+        });
+        return;
+    }
+    NSApp.appearance = [self pv_appearanceForPreferredType];
+
+    /// ⚠️ 上面这一行只影响 AppKit 自绘的部分（控件、文字、material）。
+    /// 代码里主动取的动态系统色（`NSColor.windowBackgroundColor.CGColor`、
+    /// `[NSColor colorNamed:@"xxx"].CGColor`）在绘制上下文之外解析时看的是
+    /// NSAppearance.currentAppearance：从未显式设置过的话，AppKit 会回退到**系统外观**
+    /// （首次解析后还会锁存），跟 NSApp.appearance 无关。实测：系统是 Dark、App 钉 Aqua 时，
+    /// 不设这一行 windowBackgroundColor 取出来是深色，设了才是白色。
+    /// 因此在这里常驻一个跟随 App 外观的 currentAppearance，让进程内所有动态系统色
+    /// 都按我们钉住的外观解析。绘制过程中 AppKit 会压栈 view 自己的外观，不受影响。
+    NSAppearance.currentAppearance = NSApp.effectiveAppearance;
+
+    [self pv_refreshAppearanceColors];
+
+    /// AppKit 对 NSApp.appearance 变化的响应（把 effectiveAppearance 级联给所有 view）不是同步完成的，
+    /// 它会在下一个 run loop turn 才派发。视图里那些「在 viewDidChangeEffectiveAppearance 中按当前
+    /// 外观重新取色」的逻辑如果晚于我们执行倒无所谓，但反过来 —— 若某些 view 在我们刷新之后才被
+    /// 级联、且它自己缓存了旧外观下的值 —— 就会把新值盖回旧的。
+    /// 因此在 AppKit 级联完成之后再补刷一次，两个方向（亮→暗、暗→亮）都能收敛到正确结果。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self pv_refreshAppearanceColors];
+    });
+}
+
+- (void)pv_refreshAppearanceColors {
+    /// AppKit 会把 effectiveAppearance 的变化级联给所有 view（触发 viewDidChangeEffectiveAppearance），
+    /// 但有两件事它不会替我们做：
+    /// 1. 直接写到 CALayer 上的 CGColor 是赋值那一刻解析出来的静态值（见 NSView+PVClient
+    ///    的 pv_setLayerBackgroundColor:），得重新求值；
+    /// 2. 自定义 drawRect: 的 view 不会因为 appearance 变化而自动重绘，得失效一次。
+    /// 这里遍历一遍所有窗口的 view tree 把两件事都补上。
+    for (NSWindow *window in NSApp.windows) {
+        [NSView pv_refreshAppearanceColorsIn:window.contentView];
     }
 }
 

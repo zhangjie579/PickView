@@ -184,7 +184,7 @@ static CGFloat const PVPreviewMaxCameraFocalLength = 750.0;
 
     self.allowsCameraControl = NO;
     self.showsStatistics = NO;
-    self.backgroundColor = NSColor.whiteColor;
+    self.backgroundColor = NSColor.textBackgroundColor;
     self.scene = [SCNScene scene];
 
     self.stageNode = [SCNNode node];
@@ -215,6 +215,12 @@ static CGFloat const PVPreviewMaxCameraFocalLength = 750.0;
     node.light = light;
     node.position = position;
     return node;
+}
+
+/// SCNView 的背景色是一次性/static 的，跟着 App 外观（深/浅）重新取一次动态系统色。
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    self.backgroundColor = NSColor.textBackgroundColor;
 }
 
 - (void)resetPreview {
