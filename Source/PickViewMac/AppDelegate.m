@@ -19,6 +19,7 @@
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    [self pv_installApplicationMenus];
     [self pv_installEditMenu];
     // Preferences 里的 Appearance（Dark / Light / System）写进 UserDefaults 之后，
     // 只有这里会把它真正作用到 NSApp 上。必须在创建任何窗口之前调用，
@@ -30,6 +31,44 @@
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [self.clientWindowController stop];
+}
+
+#pragma mark - Main Menu
+
+/// 这个 target 没有 MainMenu nib，AppKit 不会自动提供 ⌘W / ⌘Q 对应的菜单项。
+/// 键盘等效键只会从主菜单的 NSMenuItem 分发，因此必须显式添加“关闭窗口”和“退出”。
+- (void)pv_installApplicationMenus {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        mainMenu = [[NSMenu alloc] initWithTitle:@""];
+        [NSApp setMainMenu:mainMenu];
+    }
+
+    if (![mainMenu itemWithTitle:@"PickView"]) {
+        NSMenuItem *applicationMenuItem = [[NSMenuItem alloc] initWithTitle:@"PickView"
+                                                                      action:NULL
+                                                               keyEquivalent:@""];
+        NSMenu *applicationMenu = [[NSMenu alloc] initWithTitle:@"PickView"];
+        applicationMenuItem.submenu = applicationMenu;
+        [applicationMenu addItem:[self pv_menuItemWithTitle:@"Quit PickView"
+                                                     action:@selector(terminate:)
+                                              keyEquivalent:@"q"
+                                               modifierMask:NSEventModifierFlagCommand]];
+        [mainMenu addItem:applicationMenuItem];
+    }
+
+    if (![mainMenu itemWithTitle:@"File"]) {
+        NSMenuItem *fileMenuItem = [[NSMenuItem alloc] initWithTitle:@"File"
+                                                               action:NULL
+                                                        keyEquivalent:@""];
+        NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+        fileMenuItem.submenu = fileMenu;
+        [fileMenu addItem:[self pv_menuItemWithTitle:@"Close Window"
+                                              action:@selector(performClose:)
+                                       keyEquivalent:@"w"
+                                        modifierMask:NSEventModifierFlagCommand]];
+        [mainMenu addItem:fileMenuItem];
+    }
 }
 
 #pragma mark - Edit Menu
@@ -101,6 +140,16 @@
                               action:(SEL)action
                        keyEquivalent:(NSString *)keyEquivalent
                         modifierMask:(NSEventModifierFlags)modifierMask {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:keyEquivalent];
+    item.target = nil;
+    item.keyEquivalentModifierMask = modifierMask;
+    return item;
+}
+
+- (NSMenuItem *)pv_menuItemWithTitle:(NSString *)title
+                               action:(SEL)action
+                        keyEquivalent:(NSString *)keyEquivalent
+                         modifierMask:(NSEventModifierFlags)modifierMask {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:keyEquivalent];
     item.target = nil;
     item.keyEquivalentModifierMask = modifierMask;
