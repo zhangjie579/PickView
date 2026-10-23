@@ -50,6 +50,9 @@ typedef NS_ENUM(NSInteger, PVAppInfoDevice) {
 @property(nonatomic, assign) double screenHeight;
 /// 是几倍的屏幕
 @property(nonatomic, assign) double screenScale;
+/// VM Service address reported by Flutter. This address is meaningful only on
+/// the Mac host and is consumed by PickViewMac to create a relay.
+@property(nonatomic, copy, nullable) NSString *flutterVMServiceURL;
 
 - (BOOL)isEqualToAppInfo:(PVAppInfo *)info;
 + (NSInteger)getAppInfoIdentifier;

@@ -36,5 +36,6 @@ typedef NS_ENUM(uint32_t, PVRequestType) {
 /// PVRequestTypeInspectorSettings 的设置项 key。Mac 端与被调试 app 共用同一个 header，
 /// 这里用宏定义以避免为了一个常量再新增一个编译单元。
 #define PVInspectorSettingsKey_HideFlutterBlocWidgets @"hideFlutterBlocWidgets"
+#define PVInspectorSettingsKey_FlutterVMServiceProxyURL @"flutterVMServiceProxyURL"
 
 #endif /* PVRequestType_h */

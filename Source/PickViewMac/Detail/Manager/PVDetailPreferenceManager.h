@@ -78,6 +78,10 @@ typedef NS_ENUM(NSInteger, PVMeasureState) {
 /// 默认为 NO。
 @property(nonatomic, assign) BOOL hideFlutterBlocWidgets;
 
+/// 是否允许真机在无法直连 Flutter VM Service 时使用 PickView 中转。
+/// 默认 NO；仅 Android Studio + iPhone 等主机 loopback 不可达的场景需要开启。
+@property(nonatomic, assign) BOOL enableFlutterVMServiceProxy;
+
 @property(nonatomic, assign) BOOL enableReport;
 
 @property(nonatomic, assign) BOOL rgbaFormat;

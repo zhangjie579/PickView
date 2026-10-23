@@ -14,6 +14,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// flutter 根节点的 widget name
 @property (nonatomic, copy, nullable) NSString *flutterRootNodeWidgetName;
 
+/// The VM Service URI reported by Flutter's Dart side.  With a physical iOS
+/// device launched from Android Studio this is a Mac-only localhost URI, so it
+/// is published to PickViewMac but must never be used directly by iOS.
+@property (nonatomic, copy, nullable) NSString *reportedVMServiceURL;
+
+/// A device-reachable URI supplied by PickViewMac's authenticated relay.
+/// When present it takes precedence over FlutterEngine.vmServiceUrl.
+@property (nonatomic, copy, nullable) NSString *vmServiceURLOverride;
+
 /// 是否在 PickView 上过滤（不显示）Bloc 相关的状态管理 widget。
 ///
 /// 开启后 flutter_bloc 一类的容器/监听控件（BlocProvider、BlocBuilder、

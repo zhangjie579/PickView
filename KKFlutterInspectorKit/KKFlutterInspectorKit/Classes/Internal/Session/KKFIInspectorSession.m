@@ -1,4 +1,5 @@
 #import "KKFIInspectorSession.h"
+#import "KKFlutterInspectorConfigure.h"
 
 #import <math.h>
 
@@ -33,6 +34,12 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
 @property(nonatomic) NSUInteger attemptID;
 @property(nonatomic, strong, nullable) KKFIVMServiceClient *serviceClient;
 @property(nonatomic, strong, nullable) NSURL *vmServiceURL;
+// The relay is only a fallback for a physical device that cannot reach the
+// originally reported service URI (for example, Android Studio's host
+// loopback URI). Keeping the direct route first preserves Xcode's device
+// debugging behaviour.
+@property(nonatomic, strong, nullable) NSURL *directVMServiceURL;
+@property(nonatomic, assign) BOOL usingVMServiceProxy;
 @property(nonatomic, copy, nullable) NSString *isolateID;
 @property(nonatomic, copy, nullable) NSString *activeObjectGroup;
 @property(nonatomic, copy, nullable) NSString *activeSnapshotID;
@@ -102,7 +109,8 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
 
         FlutterEngine *engine = self.engine;
         BOOL engineAvailable = engine != nil;
-        NSURL *serviceURL = engine.vmServiceUrl;
+        NSURL *directServiceURL = engine.vmServiceUrl;
+        NSURL *proxyServiceURL = [NSURL URLWithString:KKFlutterInspectorConfigure.sharedManager.vmServiceURLOverride];
         NSString *isolateID = [engine.isolateId copy];
         dispatch_async(self.stateQueue, ^{
             if (!engineAvailable) {
@@ -111,6 +119,17 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                        description:@"The Flutter engine was released."]);
                 return;
             }
+
+            // A restarted engine must retry its own URI first. A relay URL
+            // from a previous engine is not meaningful for the new service.
+            if (self.state != KKFIInspectorSessionStateConnecting &&
+                self.directVMServiceURL != nil && directServiceURL != nil &&
+                ![directServiceURL isEqual:self.directVMServiceURL]) {
+                self.usingVMServiceProxy = NO;
+            }
+            NSURL *serviceURL = self.usingVMServiceProxy && proxyServiceURL != nil
+                ? proxyServiceURL
+                : directServiceURL;
 
             BOOL identityMatches =
                 self.state == KKFIInspectorSessionStateConnected &&
@@ -151,7 +170,8 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
 
         FlutterEngine *engine = self.engine;
         BOOL engineAvailable = engine != nil;
-        NSURL *serviceURL = engine.vmServiceUrl;
+        NSURL *directServiceURL = engine.vmServiceUrl;
+        NSURL *proxyServiceURL = [NSURL URLWithString:KKFlutterInspectorConfigure.sharedManager.vmServiceURLOverride];
         NSString *isolateID = [engine.isolateId copy];
 
         dispatch_async(self.stateQueue, ^{
@@ -159,6 +179,10 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                 self.attemptID != attemptID) {
                 return;
             }
+
+            NSURL *serviceURL = self.usingVMServiceProxy && proxyServiceURL != nil
+                ? proxyServiceURL
+                : directServiceURL;
 
             if (!engineAvailable) {
                 [self finishAttempt:attemptID
@@ -184,6 +208,14 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                      callbackQueue:self.stateQueue
                              error:&clientError];
             if (client == nil) {
+                if (!self.usingVMServiceProxy &&
+                    directServiceURL != nil && proxyServiceURL != nil &&
+                    ![directServiceURL isEqual:proxyServiceURL]) {
+                    self.usingVMServiceProxy = YES;
+                    NSLog(@"[PickViewVM] Direct VM Service client creation failed; falling back to relay %@", proxyServiceURL);
+                    [self scheduleRetryForAttemptID:attemptID];
+                    return;
+                }
                 [self finishAttempt:attemptID error:clientError];
                 return;
             }
@@ -199,6 +231,12 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                     return;
                 }
 
+                if (!self.usingVMServiceProxy &&
+                    directServiceURL != nil && proxyServiceURL != nil &&
+                    ![directServiceURL isEqual:proxyServiceURL]) {
+                    self.usingVMServiceProxy = YES;
+                    NSLog(@"[PickViewVM] Direct VM Service disconnected; falling back to relay %@", proxyServiceURL);
+                }
                 [self clearConnection];
                 if (self.state == KKFIInspectorSessionStateConnecting &&
                     self.attemptID == attemptID) {
@@ -223,6 +261,12 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                 }
 
                 if (error != nil) {
+                    if (!self.usingVMServiceProxy &&
+                        directServiceURL != nil && proxyServiceURL != nil &&
+                        ![directServiceURL isEqual:proxyServiceURL]) {
+                        self.usingVMServiceProxy = YES;
+                        NSLog(@"[PickViewVM] Direct VM Service unavailable; falling back to relay %@", proxyServiceURL);
+                    }
                     [self clearConnection];
                     [self scheduleRetryForAttemptID:attemptID];
                     return;
@@ -236,6 +280,7 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                     [self abandonSnapshotStateWithError:staleError];
                 }
                 self.vmServiceURL = serviceURL;
+                self.directVMServiceURL = directServiceURL;
                 self.isolateID = isolateID;
                 [self finishAttempt:attemptID error:nil];
             }];

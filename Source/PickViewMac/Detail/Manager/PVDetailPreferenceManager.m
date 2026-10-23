@@ -37,6 +37,7 @@ static NSString * const Key_PreferredExportCompression = @"preferredExportCompre
 static NSString * const Key_CallStackType = @"callStackType";
 static NSString * const Key_SyncConsoleTarget = @"syncConsoleTarget";
 static NSString * const Key_HideFlutterBlocWidgets = @"hideFlutterBlocWidgets";
+static NSString * const Key_EnableFlutterVMServiceProxy = @"enableFlutterVMServiceProxy";
 static NSString * const Key_FreeRotation = @"FreeRotation";
 static NSString * const Key_FastMode = @"fastMode";
 static NSString * const Key_ReceivingConfigTime_Color = @"ConfigTime_Color";
@@ -110,6 +111,14 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
         } else {
             _hideFlutterBlocWidgets = NO;
             [userDefaults setObject:@(_hideFlutterBlocWidgets) forKey:Key_HideFlutterBlocWidgets];
+        }
+
+        NSNumber *obj_enableFlutterVMServiceProxy = [userDefaults objectForKey:Key_EnableFlutterVMServiceProxy];
+        if (obj_enableFlutterVMServiceProxy != nil) {
+            _enableFlutterVMServiceProxy = [obj_enableFlutterVMServiceProxy boolValue];
+        } else {
+            _enableFlutterVMServiceProxy = NO;
+            [userDefaults setObject:@(_enableFlutterVMServiceProxy) forKey:Key_EnableFlutterVMServiceProxy];
         }
 
         NSNumber *obj_enableReport = [userDefaults objectForKey:Key_EnableReport];
@@ -244,6 +253,17 @@ static NSString * const Key_ReceivingConfigTime_Class = @"ConfigTime_Class";
     if (self.shouldStoreToLocal) {
         [[NSUserDefaults standardUserDefaults] setObject:@(hideFlutterBlocWidgets)
                                                   forKey:Key_HideFlutterBlocWidgets];
+    }
+}
+
+- (void)setEnableFlutterVMServiceProxy:(BOOL)enableFlutterVMServiceProxy {
+    if (_enableFlutterVMServiceProxy == enableFlutterVMServiceProxy) {
+        return;
+    }
+    _enableFlutterVMServiceProxy = enableFlutterVMServiceProxy;
+    if (self.shouldStoreToLocal) {
+        [[NSUserDefaults standardUserDefaults] setObject:@(enableFlutterVMServiceProxy)
+                                                  forKey:Key_EnableFlutterVMServiceProxy];
     }
 }
 

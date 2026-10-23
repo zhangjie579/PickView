@@ -32,6 +32,9 @@ extern NSString *const PVDetailInspectingAppDidEndNotificationName;
 /// 下发偏好后重新拉取层级并刷新界面。没有正在检视的 app 时什么都不做。
 - (void)pushInspectorSettingsAndReloadInspection;
 
+/// 应用“使用 PickView Flutter VM 代理”偏好到当前 app。
+- (void)reloadFlutterVMServiceRelayForInspectingApp;
+
 /// 断开后自动重连成功
 @property(nonatomic, strong, readonly) RACSubject *didAutoReconnectSucc;
 

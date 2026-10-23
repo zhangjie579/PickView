@@ -124,10 +124,151 @@ dns-sd -B _pickview._tcp local.
 
 - iOS 的 `PickViewServer` 会自动带入并使用 `KKFlutterInspectorKit`，不需要业务侧单独声明或初始化 InspectorKit。
 - Flutter Engine 必须处于 Debug；部分 Profile 构建可能可用，Release 构建不可用。
-- 不需要手动配置 VM Service URI，不需要 MethodChannel，也不需要从日志解析 Dart Service 地址。
+- 常规 Xcode/Simulator 调试不需要手动配置 VM Service URI、MethodChannel 或日志解析。Android Studio + iPhone 真机的 relay 例外，见下文。
 - InspectorKit 从对应的 `FlutterEngine` 获取 `vmServiceUrl` 和 `isolateId`，然后通过 WebSocket JSON-RPC 调用 `ext.flutter.inspector.*`。
 - `_pickview._tcp` 仅用于 PickView Mac 发现 PickView Server；Flutter Inspector 连接不通过 Bonjour。
 - 当 VM Service 不可用时，原生 `FlutterViewController`/`FlutterView` 层级仍然可以显示，但无法展开 Flutter Widget 子树。
+
+#### Android Studio + iPhone 真机
+
+Android Studio 启动 Flutter 真机时，Dart VM Service 往往以 Mac 上的
+`127.0.0.1:<port>` 形式暴露。对 iPhone 而言，该地址指向的是手机自身，
+因此不能直接连接。PickView 可选地建立一条中转链路：
+
+```text
+PickView Mac -> iPhone -> PickView Mac 的 VM Service relay -> Android Studio VM Service
+```
+
+使用步骤：
+
+1. 确认被检查 App 通过 `PickViewServer` 的当前版本集成，并在 Debug 模式运行。
+2. 按当前 `main.dart` 的方式，在 `WidgetsFlutterBinding.ensureInitialized()` 后注册
+   Channel，并在首帧后延迟上报 URI。延迟是必需的：FlutterBoost 可能在
+   `FlutterViewController` 挂载前启动 Dart，过早调用会找不到原生处理器。
+
+   ```dart
+   import 'dart:developer' as developer;
+   import 'package:flutter/foundation.dart';
+   import 'package:flutter/services.dart';
+
+   const MethodChannel pickViewVMDiagnosticChannel = MethodChannel(
+     'com.badambiz.sawa/pickview_vm_diagnostic',
+   );
+
+   WidgetsFlutterBinding.ensureInitialized();
+   pickViewVMDiagnosticChannel.setMethodCallHandler((call) async {
+     if (call.method == 'log') {
+       debugPrint('[PickViewVM] ${call.arguments}');
+     }
+   });
+
+   if (kDebugMode) {
+     WidgetsBinding.instance.addPostFrameCallback((_) async {
+       await Future<void>.delayed(const Duration(milliseconds: 300));
+       try {
+         final info = await developer.Service.getInfo();
+         debugPrint('[PickViewVM] Dart Service.getInfo serverUri=${info.serverUri}');
+         final serverUri = info.serverUri;
+         if (serverUri == null) return;
+         await pickViewVMDiagnosticChannel
+             .invokeMethod<void>('setReportedVmServiceUri', serverUri.toString())
+             .timeout(const Duration(seconds: 3));
+         debugPrint('[PickViewVM] VM Service URI reported to PickView');
+       } catch (error) {
+         debugPrint('[PickViewVM] VM Service URI report failed: $error');
+       }
+     });
+   }
+   ```
+
+   iOS 宿主需要将 `DebugManager.m` 替换为如下完整文件（如已有业务逻辑，请合并而非覆盖）：
+
+   ```objc
+   //
+   //  DebugManager.m
+   //
+
+   #import "DebugManager.h"
+   #import <Flutter/Flutter.h>
+   #import <PickViewServer/PickViewServerKit.h>
+   #import <KKFlutterInspectorKit/KKFlutterInspectorConfigure.h>
+   #import <objc/runtime.h>
+
+   static NSString *const PickViewVMDiagnosticChannel =
+       @"com.badambiz.sawa/pickview_vm_diagnostic";
+   static const void *PickViewVMChannelAssociationKey =
+       &PickViewVMChannelAssociationKey;
+
+   @interface DebugManager (PickViewVMBridge)
+   + (void)installPickViewVMBridgeOnController:(FlutterViewController *)controller;
+   @end
+
+   @interface FlutterViewController (PickViewVMBridge)
+   @end
+
+   @implementation DebugManager
+
+   + (void)load {
+       KKFlutterInspectorConfigure.sharedManager.flutterRootNodeWidgetName = @"NavigatorExt";
+
+       PickViewServerConfiguration *configuration =
+           [PickViewServerConfiguration defaultConfiguration];
+       configuration.enableLANTransport = false;
+       configuration.lanServiceName = [[NSBundle mainBundle] bundleIdentifier] ?: @"My App";
+       [PickViewServer.sharedServer startWithConfiguration:configuration];
+
+       static dispatch_once_t onceToken;
+       dispatch_once(&onceToken, ^{
+           Method original = class_getInstanceMethod(FlutterViewController.class, @selector(viewDidLoad));
+           Method replacement = class_getInstanceMethod(FlutterViewController.class, @selector(pv_pickViewVM_viewDidLoad));
+           method_exchangeImplementations(original, replacement);
+       });
+   }
+
+   + (void)installPickViewVMBridgeOnController:(FlutterViewController *)controller {
+       if (!controller || objc_getAssociatedObject(controller, PickViewVMChannelAssociationKey)) {
+           return;
+       }
+       FlutterMethodChannel *channel = [FlutterMethodChannel
+           methodChannelWithName:PickViewVMDiagnosticChannel
+                  binaryMessenger:controller.binaryMessenger];
+       objc_setAssociatedObject(controller, PickViewVMChannelAssociationKey, channel,
+                                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+       [channel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+           if ([call.method isEqualToString:@"setReportedVmServiceUri"] &&
+               [call.arguments isKindOfClass:NSString.class]) {
+               KKFlutterInspectorConfigure.sharedManager.reportedVMServiceURL = call.arguments;
+               NSLog(@"[PickViewVM] reported host VM Service URL=%@", call.arguments);
+               result(nil);
+               return;
+           }
+           result(FlutterMethodNotImplemented);
+       }];
+   }
+
+   @end
+
+   @implementation FlutterViewController (PickViewVMBridge)
+   - (void)pv_pickViewVM_viewDidLoad {
+       [self pv_pickViewVM_viewDidLoad];
+       [DebugManager installPickViewVMBridgeOnController:self];
+   }
+
+   @end
+   ```
+3. 在 PickView Mac 中打开 **Preferences**，启用 **Use PickView Flutter VM relay**。
+   该选项默认关闭，只建议在 Android Studio + iPhone 真机无法直连 VM Service 时开启。
+4. 连接设备并进入 Flutter 页面。PickView 会先尝试原始 VM Service；直连失败后才使用
+   relay，不会改变 Xcode + iPhone 的正常直连路径。
+
+排查时可查看日志：
+
+- `[PickViewVMProxy] listening ...`：Mac relay 已创建并下发给设备。
+- `[PickViewVM] Direct VM Service unavailable; falling back to relay ...`：真机直连失败，已切换 relay。
+- 未出现第二条日志：仍使用原始 VM Service（Xcode 真机通常是这个路径）。
+
+relay 使用局域网 IPv4 地址，因此 Mac 和 iPhone 必须处于同一局域网，且 iOS App 的
+本地网络权限、VPN/防火墙和路由器客户端隔离均不能阻断设备访问 Mac。
 
 ### 致谢与许可
 
@@ -254,10 +395,77 @@ If the device does not appear:
 
 - On iOS, `PickViewServer` brings in and uses `KKFlutterInspectorKit` automatically. The application does not declare or initialize InspectorKit separately.
 - The Flutter Engine must run in Debug. Some Profile configurations may work; Release does not.
-- No manual VM Service URI, MethodChannel, or log parsing is required.
+- Normal Xcode/Simulator debugging needs no manual VM Service URI, MethodChannel, or log parsing. Android Studio + physical iPhone relay is the exception; see below.
 - InspectorKit obtains `vmServiceUrl` and `isolateId` from the matching `FlutterEngine`, then calls `ext.flutter.inspector.*` over WebSocket JSON-RPC.
 - `_pickview._tcp` is used only for PickView Mac to discover PickView Server; Flutter Inspector does not connect through Bonjour.
 - When VM Service is unavailable, the native `FlutterViewController`/`FlutterView` hierarchy remains visible, but the Flutter Widget subtree cannot be expanded.
+
+#### Android Studio + physical iPhone
+
+When Android Studio launches Flutter on a physical iPhone, Dart VM Service is commonly
+reported as `127.0.0.1:<port>` on the Mac. From the iPhone, that loopback address points
+to the phone itself, so it cannot be used directly. PickView can optionally relay the
+connection:
+
+```text
+PickView Mac -> iPhone -> PickView Mac VM Service relay -> Android Studio VM Service
+```
+
+1. Use the current `PickViewServer` integration and run the inspected app in Debug.
+2. Match the current `main.dart`: register the Channel after
+   `WidgetsFlutterBinding.ensureInitialized()`, then report the URI after the first frame.
+   The delay is required because FlutterBoost can start Dart before its
+   `FlutterViewController` has attached.
+
+   ```dart
+   const MethodChannel pickViewVMDiagnosticChannel = MethodChannel(
+     'com.badambiz.sawa/pickview_vm_diagnostic',
+   );
+
+   WidgetsFlutterBinding.ensureInitialized();
+   pickViewVMDiagnosticChannel.setMethodCallHandler((call) async {
+     if (call.method == 'log') debugPrint('[PickViewVM] ${call.arguments}');
+   });
+
+   if (kDebugMode) {
+     WidgetsBinding.instance.addPostFrameCallback((_) async {
+       await Future<void>.delayed(const Duration(milliseconds: 300));
+       try {
+         final info = await developer.Service.getInfo();
+         final serverUri = info.serverUri;
+         if (serverUri == null) return;
+         await pickViewVMDiagnosticChannel
+             .invokeMethod<void>('setReportedVmServiceUri', serverUri.toString())
+             .timeout(const Duration(seconds: 3));
+       } catch (error) {
+         debugPrint('[PickViewVM] VM Service URI report failed: $error');
+       }
+     });
+   }
+   ```
+
+   The iOS host must mirror `DebugManager.m`: swizzle
+   `FlutterViewController`'s `viewDidLoad`, install the same MethodChannel on
+   each controller's `binaryMessenger`, retain it through an associated object,
+   and assign `setReportedVmServiceUri` to
+   `KKFlutterInspectorConfigure.sharedManager.reportedVMServiceURL`. Keep the
+   one-install-per-controller guard from the implementation.
+3. In PickView Mac, open **Preferences** and enable **Use PickView Flutter VM relay**.
+   It is disabled by default and should be enabled only for Android Studio + physical iPhone
+   when direct VM Service access fails.
+4. Connect the device and open a Flutter page. PickView tries the original VM Service first,
+   then falls back to the relay only when direct access fails; a normal Xcode + iPhone run
+   remains on its direct path.
+
+Useful logs:
+
+- `[PickViewVMProxy] listening ...`: the Mac relay has been created and sent to the device.
+- `[PickViewVM] Direct VM Service unavailable; falling back to relay ...`: the device switched to the relay.
+- Without the second message, the original VM Service remains in use.
+
+The relay uses the Mac's LAN IPv4 address. The Mac and iPhone must be on the same LAN, and
+Local Network permission, VPN/firewall rules, and router client isolation must not block the
+iPhone from reaching the Mac.
 
 ### Credits and License
 

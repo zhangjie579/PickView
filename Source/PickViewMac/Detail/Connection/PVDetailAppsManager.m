@@ -14,6 +14,7 @@
 #import "PVEndpointProtocol.h"
 #import "PVPeerIdentity.h"
 #import "PVUSBEndpoint.h"
+#import "PVFlutterVMServiceProxy.h"
 
 NSString *const PVDetailInspectingAppDidEndNotificationName = @"PVDetailInspectingAppDidEndNotificationName";
 
@@ -26,6 +27,7 @@ NSString *const PVDetailInspectingAppDidEndNotificationName = @"PVDetailInspecti
 @property(nonatomic, strong) NSImage *reconnectingAppIcon;
 @property(nonatomic, strong) NSDate *lastReconnectAttemptDate;
 @property(nonatomic, assign) BOOL reconnectInFlight;
+@property(nonatomic, strong) PVFlutterVMServiceProxy *flutterVMServiceProxy;
 
 @end
 
@@ -68,6 +70,8 @@ NSString *const PVDetailInspectingAppDidEndNotificationName = @"PVDetailInspecti
         self.reconnectingAppIcon = nil;
         self.lastReconnectAttemptDate = nil;
         self.reconnectInFlight = NO;
+        [self configureFlutterVMServiceRelayForApp:inspectingApp];
+        [self refreshFlutterVMServiceInfoForApp:inspectingApp];
         [self.willConnectToApp sendNext:inspectingApp];
     }
 
@@ -79,10 +83,80 @@ NSString *const PVDetailInspectingAppDidEndNotificationName = @"PVDetailInspecti
 #pragma mark - Inspector settings
 
 - (NSDictionary<NSString *, id> *)currentInspectorSettings {
-    return @{
+    NSMutableDictionary<NSString *, id> *settings = [@{
         PVInspectorSettingsKey_HideFlutterBlocWidgets :
             @([PVDetailPreferenceManager mainManager].hideFlutterBlocWidgets),
-    };
+    } mutableCopy];
+    // Always include this key so turning the preference off clears a relay
+    // URL which may already have been received by the inspected app.
+    settings[PVInspectorSettingsKey_FlutterVMServiceProxyURL] =
+        self.flutterVMServiceProxy.deviceURL ?: @"";
+    return settings;
+}
+
+- (void)configureFlutterVMServiceRelayForApp:(PVDetailInspectableApp *)app {
+    [self.flutterVMServiceProxy stop];
+    self.flutterVMServiceProxy = nil;
+    if (![PVDetailPreferenceManager mainManager].enableFlutterVMServiceProxy) {
+        [[app sendInspectorSettings:[self currentInspectorSettings]]
+            subscribeError:^(NSError *sendError) {
+                NSLog(@"[PickViewVMProxy] failed to clear relay URL: %@", sendError.localizedDescription);
+            }];
+        return;
+    }
+    // The simulator shares the Mac's loopback namespace, so it can reach the
+    // Dart VM Service directly. Do not create or send a relay for it.
+    if (app.appInfo.deviceType == PVAppInfoDeviceSimulator) {
+        return;
+    }
+
+    NSString *hostURL = app.appInfo.flutterVMServiceURL;
+    if (!hostURL.length) {
+        return;
+    }
+
+    PVFlutterVMServiceProxy *proxy = [[PVFlutterVMServiceProxy alloc] init];
+    NSError *error = nil;
+    if (![proxy startWithHostVMServiceURL:hostURL error:&error]) {
+        NSLog(@"[PickViewVMProxy] failed to start for %@: %@", hostURL, error.localizedDescription);
+        return;
+    }
+    self.flutterVMServiceProxy = proxy;
+    [[app sendInspectorSettings:[self currentInspectorSettings]]
+        subscribeError:^(NSError *sendError) {
+            NSLog(@"[PickViewVMProxy] failed to send relay URL: %@", sendError.localizedDescription);
+        }];
+}
+
+- (void)reloadFlutterVMServiceRelayForInspectingApp {
+    PVDetailInspectableApp *app = self.inspectingApp;
+    if (!app) {
+        return;
+    }
+    [self configureFlutterVMServiceRelayForApp:app];
+    if ([PVDetailPreferenceManager mainManager].enableFlutterVMServiceProxy) {
+        [self refreshFlutterVMServiceInfoForApp:app];
+    }
+}
+
+- (void)refreshFlutterVMServiceInfoForApp:(PVDetailInspectableApp *)app {
+    if (!app.session || app.appInfo.deviceType == PVAppInfoDeviceSimulator ||
+        app.appInfo.flutterVMServiceURL.length) {
+        return;
+    }
+    // The launch screen may have fetched AppInfo before Dart had obtained its
+    // VM Service URI. Bypass the normal 8-second cache when this app is picked
+    // so the relay is configured from the current, not stale, response.
+    @weakify(self);
+    [[self fetchInspectableAppForSession:app.session needImages:NO localInfos:@[]]
+        subscribeNext:^(PVDetailInspectableApp *freshApp) {
+            @strongify(self);
+            if (!self || self.inspectingApp != app || !freshApp.appInfo.flutterVMServiceURL.length) {
+                return;
+            }
+            app.appInfo.flutterVMServiceURL = freshApp.appInfo.flutterVMServiceURL;
+            [self configureFlutterVMServiceRelayForApp:app];
+        }];
 }
 
 - (RACSignal *)pushInspectorSettingsToApp:(PVDetailInspectableApp *)app {

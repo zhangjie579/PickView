@@ -13,6 +13,7 @@
 #import <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
+#import "KKFlutterInspectorConfigure.h"
 #else
 #import <AppKit/AppKit.h>
 #endif
@@ -84,6 +85,7 @@
     info.screenWidth = screen.bounds.size.width;
     info.screenHeight = screen.bounds.size.height;
     info.screenScale = screen ? screen.scale : 1;
+    info.flutterVMServiceURL = KKFlutterInspectorConfigure.sharedManager.reportedVMServiceURL;
     if (needImages) {
         info.screenshot = [self screenshotForWindow:window];
         info.appIcon = [self appIcon];

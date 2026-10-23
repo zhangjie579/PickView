@@ -21,6 +21,7 @@
 @property(nonatomic, strong) PVDetailPreferencePopupView *view_colorFormat;
 @property(nonatomic, strong) PVDetailPreferenceSwitchView *view_enableLog;
 @property(nonatomic, strong) PVDetailPreferenceSwitchView *view_hideFlutterBloc;
+@property(nonatomic, strong) PVDetailPreferenceSwitchView *view_enableFlutterVMServiceProxy;
 @property(nonatomic, strong) PVDetailPreferencePopupView *view_contrast;
 
 //@property(nonatomic, strong) NSButton *debugButton;
@@ -87,6 +88,19 @@
     };
     [self.view addSubview:self.view_hideFlutterBloc];
 
+    self.view_enableFlutterVMServiceProxy = [[PVDetailPreferenceSwitchView alloc]
+        initWithTitle:NSLocalizedString(@"Use PickView Flutter VM relay", nil)
+              message:NSLocalizedString(@"Enable only for Android Studio + iPhone when the Flutter VM Service cannot be reached directly.", nil)];
+    self.view_enableFlutterVMServiceProxy.didChange = ^(BOOL isChecked) {
+        PVDetailPreferenceManager *manager = [PVDetailPreferenceManager mainManager];
+        if (manager.enableFlutterVMServiceProxy == isChecked) {
+            return;
+        }
+        manager.enableFlutterVMServiceProxy = isChecked;
+        [[PVDetailAppsManager sharedInstance] reloadFlutterVMServiceRelayForInspectingApp];
+    };
+    [self.view addSubview:self.view_enableFlutterVMServiceProxy];
+
 //    self.debugButton = [NSButton lk_normalButtonWithTitle:@"Debug" target:self action:@selector(_handleDebugButton)];
 //    [self.view addSubview:self.debugButton];
     
@@ -111,6 +125,7 @@
     self.view_doubleClick.selectedIndex = manager.doubleClickBehavior;
     self.view_enableLog.isChecked = manager.enableReport;
     self.view_hideFlutterBloc.isChecked = manager.hideFlutterBlocWidgets;
+    self.view_enableFlutterVMServiceProxy.isChecked = manager.enableFlutterVMServiceProxy;
 }
 
 - (void)viewDidLayout {
@@ -126,7 +141,7 @@
     $(self.view_doubleClick).x(insets.left).toRight(insets.right).y(self.view_contrast.$maxY).height(50);
     
     __block CGFloat y = self.view_doubleClick.$maxY;
-    [$(self.view_enableLog, self.view_hideFlutterBloc).array enumerateObjectsUsingBlock:^(NSView *  _Nonnull view, NSUInteger idx, BOOL * _Nonnull stop) {
+    [$(self.view_enableLog, self.view_hideFlutterBloc, self.view_enableFlutterVMServiceProxy).array enumerateObjectsUsingBlock:^(NSView *  _Nonnull view, NSUInteger idx, BOOL * _Nonnull stop) {
         $(view).x(115).toRight(insets.right).y(y).heightToFit;
         y = view.$maxY + 5;
     }];
@@ -143,6 +158,8 @@
     manager.doubleClickBehavior = PVDoubleClickBehaviorCollapse;
     manager.imageContrastLevel = 0;
     manager.hideFlutterBlocWidgets = NO;
+    manager.enableFlutterVMServiceProxy = NO;
+    [[PVDetailAppsManager sharedInstance] reloadFlutterVMServiceRelayForInspectingApp];
     [self renderFromPreferenceManager];
     
 #if DEBUG

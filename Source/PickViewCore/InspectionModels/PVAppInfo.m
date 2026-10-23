@@ -42,6 +42,7 @@ static NSString * const CodingKey_DeviceType = @"8";
     newAppInfo.serverReadableVersion = self.serverReadableVersion;
     newAppInfo.swiftEnabledInPickViewServer = self.swiftEnabledInPickViewServer;
     newAppInfo.appBundleIdentifier = self.appBundleIdentifier;
+    newAppInfo.flutterVMServiceURL = self.flutterVMServiceURL;
 #if !TARGET_OS_IPHONE
     newAppInfo.cachedTimestamp = self.cachedTimestamp;
 #endif
@@ -71,6 +72,7 @@ static NSString * const CodingKey_DeviceType = @"8";
         self.screenScale = [aDecoder decodeDoubleForKey:@"screenScale"];
         self.appInfoIdentifier = [aDecoder decodeIntegerForKey:@"appInfoIdentifier"];
         self.shouldUseCache = [aDecoder decodeBoolForKey:@"shouldUseCache"];
+        self.flutterVMServiceURL = [aDecoder decodeObjectForKey:@"flutterVMServiceURL"];
     }
     return self;
 }
@@ -94,6 +96,7 @@ static NSString * const CodingKey_DeviceType = @"8";
     [aCoder encodeDouble:self.screenScale forKey:@"screenScale"];
     [aCoder encodeInteger:self.appInfoIdentifier forKey:@"appInfoIdentifier"];
     [aCoder encodeBool:self.shouldUseCache forKey:@"shouldUseCache"];
+    [aCoder encodeObject:self.flutterVMServiceURL forKey:@"flutterVMServiceURL"];
 }
 
 + (BOOL)supportsSecureCoding {

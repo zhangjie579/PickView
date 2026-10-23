@@ -13,8 +13,8 @@
 @implementation PVDetailPreferenceWindowController
 
 - (instancetype)init {
-    // 高度需要容纳第二个开关（Bloc 过滤），它的说明文字会换行
-    PVDetailWindow *window = [[PVDetailWindow alloc] initWithContentRect:NSMakeRect(0, 0, 600, 460) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:YES];
+    // 高度需要容纳 Flutter 代理开关及其说明文字。
+    PVDetailWindow *window = [[PVDetailWindow alloc] initWithContentRect:NSMakeRect(0, 0, 600, 530) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable backing:NSBackingStoreBuffered defer:YES];
     window.movableByWindowBackground = YES;
     window.title = NSLocalizedString(@"Preferences", nil);
     [window center];

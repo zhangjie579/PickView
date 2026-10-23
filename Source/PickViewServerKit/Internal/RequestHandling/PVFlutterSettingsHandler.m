@@ -55,9 +55,6 @@
 
 - (void)applySettings:(NSDictionary *)settings {
     id hideBlocWidgets = settings[PVInspectorSettingsKey_HideFlutterBlocWidgets];
-    if (![hideBlocWidgets respondsToSelector:@selector(boolValue)]) {
-        return;
-    }
     
 #if TARGET_OS_IPHONE
 
@@ -67,10 +64,15 @@
     // host app does not link the Flutter inspector.
     KKFlutterInspectorConfigure *configure =
         [KKFlutterInspectorConfigure sharedManager];
-    if (![configure respondsToSelector:@selector(setBlocWidgetFilteringEnabled:)]) {
-        return;
+    if ([hideBlocWidgets respondsToSelector:@selector(boolValue)] &&
+        [configure respondsToSelector:@selector(setBlocWidgetFilteringEnabled:)]) {
+        configure.blocWidgetFilteringEnabled = [hideBlocWidgets boolValue];
     }
-    configure.blocWidgetFilteringEnabled = [hideBlocWidgets boolValue];
+    NSString *proxyURL = settings[PVInspectorSettingsKey_FlutterVMServiceProxyURL];
+    if ([proxyURL isKindOfClass:NSString.class] &&
+        [configure respondsToSelector:@selector(setVmServiceURLOverride:)]) {
+        configure.vmServiceURLOverride = proxyURL.length ? proxyURL : nil;
+    }
     
 #endif
 }

@@ -92,6 +92,14 @@
     return self;
 }
 
+- (void)setReportedVMServiceURL:(NSString *)reportedVMServiceURL {
+    _reportedVMServiceURL = [reportedVMServiceURL copy];
+}
+
+- (void)setVmServiceURLOverride:(NSString *)vmServiceURLOverride {
+    _vmServiceURLOverride = [vmServiceURLOverride copy];
+}
+
 - (nullable NSSet<NSString *> *)activeBlocWidgetTypes {
     if (!self.isBlocWidgetFilteringEnabled) {
         return nil;
