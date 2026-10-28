@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
     :tag => s.version.to_s
   }
 
-  s.ios.deployment_target = '14.0'
+  s.ios.deployment_target = '13.0'
   s.osx.deployment_target = '11.0'
   s.requires_arc = true
   s.module_name = 'PickViewCore'

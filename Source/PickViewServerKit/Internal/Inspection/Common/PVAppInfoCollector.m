@@ -13,7 +13,7 @@
 #import <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
-#import "KKFlutterInspectorConfigure.h"
+@import KKFlutterInspectorKit;
 #else
 #import <AppKit/AppKit.h>
 #endif

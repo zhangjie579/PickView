@@ -10,7 +10,7 @@
 #import "PVRequestType.h"
 #import "PVResponseAttachment.h"
 #if TARGET_OS_IPHONE
-#import "KKFlutterInspectorConfigure.h"
+@import KKFlutterInspectorKit;
 #endif
 
 @implementation PVFlutterSettingsHandler
