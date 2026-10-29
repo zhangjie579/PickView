@@ -5,6 +5,7 @@
 ![PickView Mac 展示 Flutter Widget 层级、3D 视图和属性](Docs/Images/pickview-mac-flutter-inspector.png)
 
 *PickView Mac 中的 Flutter Widget 层级、3D 视图与属性面板 / Flutter widget hierarchy, 3D view, and properties in PickView Mac.*
+*不要使用fast mode, 对于flutter页面来说，展开折叠节点node有问题⚠️*
 
 ## 中文
 

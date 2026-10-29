@@ -23,6 +23,18 @@
 #import "PVDetailVersionComparer.h"
 #import "PVDetailAppsManager.h"
 #import "PVDetailDanceUIAttrMaker.h"
+#import "PVDisplayItem+PVClient.h"
+
+static NSString *PVDetailExpansionStateKey(PVDisplayItem *item, BOOL preferViewOid) {
+    if (item.objectID.length > 0) {
+        return [@"object:" stringByAppendingString:item.objectID];
+    }
+    unsigned long oid = [item bestObjectOidPreferView:preferViewOid];
+    if (oid == 0) {
+        return nil;
+    }
+    return [NSString stringWithFormat:@"oid:%lu", oid];
+}
 
 @interface PVDetailStaticHierarchyDataSource ()
 
@@ -145,6 +157,31 @@
         [self.itemDidChangeAttrGroup sendNext:displayItem];        
     }
     if (detail.subitems && (displayItem.subitems.count > 0 || detail.subitems.count > 0)) {
+        BOOL preferViewOid = [PVDetailHelper appInfoLooksLikeMacTarget:self.rawHierarchyInfo.appInfo];
+        NSArray<PVDisplayItem *> *previousSubtree =
+            [PVDisplayItem flatItemsFromHierarchicalItems:displayItem.subitems];
+        NSMutableDictionary<NSString *, NSNumber *> *expansionStateByKey =
+            [NSMutableDictionary dictionaryWithCapacity:previousSubtree.count];
+        NSMutableSet<NSString *> *previousSubtreeKeys =
+            [NSMutableSet setWithCapacity:previousSubtree.count];
+        for (PVDisplayItem *item in previousSubtree) {
+            NSString *key = PVDetailExpansionStateKey(item, preferViewOid);
+            if (key.length == 0) {
+                continue;
+            }
+            expansionStateByKey[key] = @(item.isExpanded);
+            [previousSubtreeKeys addObject:key];
+        }
+
+        NSString *selectedItemKey = PVDetailExpansionStateKey(self.selectedItem, preferViewOid);
+        if (selectedItemKey.length == 0 || ![previousSubtreeKeys containsObject:selectedItemKey]) {
+            selectedItemKey = nil;
+        }
+        NSString *hoveredItemKey = PVDetailExpansionStateKey(self.hoveredItem, preferViewOid);
+        if (hoveredItemKey.length == 0 || ![previousSubtreeKeys containsObject:hoveredItemKey]) {
+            hoveredItemKey = nil;
+        }
+
         // 如果没有这个标记位的话，待会儿的 buildDisplayingItem 在 fastMode 下会触发 update task，而此时上一个 update task 其实还没有结束（此时还在 sendTask 的 subscribe 阶段、还没有到 completion 阶段），因此就会同时有两个 update task，而 task 理论上是不能并发的。所以我们这里先简单的用一个标记位防止一下。
         self.shouldIgnoreFastModeAutoUpdate = YES;
         
@@ -161,9 +198,35 @@
         }
         
         displayItem.subitems = detail.subitems;
+        NSArray<PVDisplayItem *> *replacementSubtree =
+            [PVDisplayItem flatItemsFromHierarchicalItems:displayItem.subitems];
+        NSMutableDictionary<NSString *, PVDisplayItem *> *replacementItemsByKey =
+            [NSMutableDictionary dictionaryWithCapacity:replacementSubtree.count];
+        for (PVDisplayItem *item in replacementSubtree) {
+            NSString *key = PVDetailExpansionStateKey(item, preferViewOid);
+            if (key.length == 0) {
+                continue;
+            }
+            replacementItemsByKey[key] = item;
+            NSNumber *previousExpansionState = expansionStateByKey[key];
+            if (previousExpansionState != nil) {
+                item.isExpanded = previousExpansionState.boolValue;
+            }
+        }
         // 根据 subitems 属性打平为二维数组，同时给每个 item 设置 indentLevel
         self.rawFlatItems = [PVDisplayItem flatItemsFromHierarchicalItems:self.rawHierarchyInfo.displayItems];
         self.flatItems = self.rawFlatItems;
+
+        PVDisplayItem *replacementSelectedItem =
+            selectedItemKey.length > 0 ? replacementItemsByKey[selectedItemKey] : nil;
+        if (replacementSelectedItem) {
+            self.selectedItem = replacementSelectedItem;
+        }
+        PVDisplayItem *replacementHoveredItem =
+            hoveredItemKey.length > 0 ? replacementItemsByKey[hoveredItemKey] : nil;
+        if (replacementHoveredItem) {
+            self.hoveredItem = replacementHoveredItem;
+        }
         [self.didReloadHierarchyInfo sendNext:nil];
         
         [displayItem enumerateSelfAndChildren:^(PVDisplayItem * _Nonnull obj) {

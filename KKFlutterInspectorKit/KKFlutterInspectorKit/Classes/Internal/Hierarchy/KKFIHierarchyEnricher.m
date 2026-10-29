@@ -541,6 +541,20 @@ static NSString *KKFIPointDescription(CGPoint point) {
         return;
     }
 
+    // A custom/sliver scroll pass resolves each real box item's origin in the
+    // viewport coordinate space. Its descendants are already positioned in
+    // that item's local coordinate space by Layout Explorer, so resolving them
+    // here as well would apply the same scroll translation once per expanded
+    // hierarchy level. This is especially visible in NestedScrollView after a
+    // non-zero scroll offset: collapsed subtree screenshots look correct, but
+    // expanding the item pushes its content outside the preview.
+    //
+    // Descend only through RenderSliver* (or renderless) bridge nodes, matching
+    // the ListView/GridView target collector above.
+    if (![self isSliverBridgeLayoutNode:node]) {
+        return;
+    }
+
     NSArray *children = [node[@"children"] isKindOfClass:NSArray.class]
         ? node[@"children"]
         : @[];
@@ -567,6 +581,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                                            targetObjectIDs:targetObjectIDs
                                             axisDirection:nil
                                               scrollOffset:0
+                                        sliverPaintExtent:NAN
                                         sliverPaintOffset:CGPointZero
                                                baseOffset:CGPointZero
                                              isScrollRoot:YES
@@ -587,7 +602,79 @@ static NSString *KKFIPointDescription(CGPoint point) {
               @(result.count), @(targetObjectIDs.count),
               foundViewportOffset ? @(viewportOffset) : @"n/a");
     }
-    return result.copy;
+    return [self offsetsByConvertingAbsoluteOffsets:result
+                               toTargetRelativeOffsetsInDetailsNode:payload
+                                                   targetObjectIDs:targetObjectIDs];
+}
+
+/// The sliver walk computes every target against the scroll root so that
+/// nested paint/layout offsets can be accumulated consistently. The hierarchy
+/// protocol, however, stores each frame relative to its displayed parent. If
+/// both a sliver bridge and a box below it are targets, returning both absolute
+/// positions makes the tree builder add the bridge origin twice.
+- (NSDictionary<NSString *, NSValue *> *)
+    offsetsByConvertingAbsoluteOffsets:
+        (NSDictionary<NSString *, NSValue *> *)absoluteOffsets
+        toTargetRelativeOffsetsInDetailsNode:(NSDictionary *)detailsNode
+        targetObjectIDs:(NSSet<NSString *> *)targetObjectIDs {
+    if (absoluteOffsets.count < 2 || targetObjectIDs.count < 2) {
+        return absoluteOffsets.copy;
+    }
+
+    NSMutableDictionary<NSString *, NSString *> *parentTargetIDs =
+        [NSMutableDictionary dictionary];
+    [self collectParentTargetObjectIDsInDetailsNode:detailsNode
+                                    targetObjectIDs:targetObjectIDs
+                             nearestTargetObjectID:nil
+                                             result:parentTargetIDs];
+
+    NSMutableDictionary<NSString *, NSValue *> *relativeOffsets =
+        [absoluteOffsets mutableCopy];
+    [absoluteOffsets enumerateKeysAndObjectsUsingBlock:^(
+        NSString *objectID, NSValue *absoluteValue, BOOL *stop) {
+        NSString *ancestorID = parentTargetIDs[objectID];
+        while (ancestorID.length > 0 && absoluteOffsets[ancestorID] == nil) {
+            ancestorID = parentTargetIDs[ancestorID];
+        }
+        NSValue *ancestorValue = absoluteOffsets[ancestorID];
+        if (ancestorValue == nil) {
+            return;
+        }
+        CGPoint absoluteOffset = absoluteValue.CGPointValue;
+        CGPoint ancestorOffset = ancestorValue.CGPointValue;
+        relativeOffsets[objectID] = [NSValue valueWithCGPoint:CGPointMake(
+            absoluteOffset.x - ancestorOffset.x,
+            absoluteOffset.y - ancestorOffset.y)];
+    }];
+    return relativeOffsets.copy;
+}
+
+- (void)collectParentTargetObjectIDsInDetailsNode:(NSDictionary *)node
+                                  targetObjectIDs:(NSSet<NSString *> *)targetObjectIDs
+                           nearestTargetObjectID:(NSString *)nearestTargetObjectID
+                                           result:(NSMutableDictionary<NSString *, NSString *> *)result {
+    NSString *nextNearestTargetObjectID = nearestTargetObjectID;
+    NSString *objectID = [KKFIInspectorJSON nodeIDFromDictionary:node];
+    if ([targetObjectIDs containsObject:objectID]) {
+        if (nearestTargetObjectID.length > 0 &&
+            ![nearestTargetObjectID isEqualToString:objectID] &&
+            result[objectID] == nil) {
+            result[objectID] = nearestTargetObjectID;
+        }
+        nextNearestTargetObjectID = objectID;
+    }
+
+    NSArray *children = [node[@"children"] isKindOfClass:NSArray.class]
+        ? node[@"children"]
+        : @[];
+    for (id child in children) {
+        if ([child isKindOfClass:NSDictionary.class]) {
+            [self collectParentTargetObjectIDsInDetailsNode:child
+                                            targetObjectIDs:targetObjectIDs
+                                     nearestTargetObjectID:nextNearestTargetObjectID
+                                                     result:result];
+        }
+    }
 }
 
 /// A SingleChildScrollView scrolls one box child by translating it at paint
@@ -626,11 +713,23 @@ static NSString *KKFIPointDescription(CGPoint point) {
     NSDictionary<NSString *, NSValue *> *localOffsets =
         [self directOffsetsForTargetObjectIDs:targetObjectIDs
                                 inLayoutValue:layoutValue];
+    // The summary/layout tree can promote several visible descendants directly
+    // onto SingleChildScrollView while omitting framework-owned Padding, Align,
+    // Flex, or proxy render objects between them. A target's direct parentData
+    // is therefore not always relative to the viewport. Recover the omitted
+    // render-object chain from the details subtree before applying the
+    // viewport's paint translation.
+    NSDictionary<NSString *, NSValue *> *bridgedOffsets =
+        [self resolvedOffsetsForTargetObjectIDs:targetObjectIDs
+                             rootRenderObjectID:nil
+                                 detailsPayload:payload
+                            targetLocalOffsets:localOffsets];
     NSMutableDictionary<NSString *, NSValue *> *result =
         [NSMutableDictionary dictionaryWithCapacity:targetObjectIDs.count];
     for (NSString *objectID in targetObjectIDs) {
         CGPoint offset = paintOffset;
-        NSValue *localOffsetValue = localOffsets[objectID];
+        NSValue *localOffsetValue = bridgedOffsets[objectID]
+            ?: localOffsets[objectID];
         if (localOffsetValue != nil) {
             CGPoint localOffset = localOffsetValue.CGPointValue;
             offset.x += localOffset.x;
@@ -761,6 +860,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                                          targetObjectIDs:(NSSet<NSString *> *)targetObjectIDs
                                           axisDirection:(NSString *)axisDirection
                                             scrollOffset:(CGFloat)scrollOffset
+                                      sliverPaintExtent:(CGFloat)sliverPaintExtent
                                       sliverPaintOffset:(CGPoint)sliverPaintOffset
                                              baseOffset:(CGPoint)baseOffset
                                            isScrollRoot:(BOOL)isScrollRoot
@@ -770,6 +870,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                                                  result:(NSMutableDictionary<NSString *, NSValue *> *)result {
     NSString *nextAxisDirection = axisDirection;
     CGFloat nextScrollOffset = scrollOffset;
+    CGFloat nextSliverPaintExtent = sliverPaintExtent;
     CGPoint nextPaintOffset = sliverPaintOffset;
     CGPoint nextBaseOffset = baseOffset;
     BOOL nextInsideViewport = insideViewport;
@@ -791,6 +892,15 @@ static NSString *KKFIPointDescription(CGPoint point) {
     BOOL isSliverRenderObject = [self sliverContextFromInspectorNode:node
                                                         axisDirection:&nextAxisDirection
                                                           scrollOffset:&nextScrollOffset];
+    if (isSliverRenderObject) {
+        BOOL foundSliverPaintExtent = NO;
+        CGFloat parsedPaintExtent =
+            [self sliverPaintExtentFromInspectorNode:node
+                                               found:&foundSliverPaintExtent];
+        if (foundSliverPaintExtent) {
+            nextSliverPaintExtent = parsedPaintExtent;
+        }
+    }
     if ([self isViewportInspectorNode:node]) {
         nextInsideViewport = YES;
     }
@@ -854,9 +964,26 @@ static NSString *KKFIPointDescription(CGPoint point) {
         BOOL foundLayoutOffset = NO;
         CGFloat layoutOffset = [self sliverLayoutOffsetFromInspectorNode:node
                                                                    found:&foundLayoutOffset];
+        BOOL isForwardAxis =
+            [nextAxisDirection isEqualToString:@"down"] ||
+            [nextAxisDirection isEqualToString:@"right"];
+        BOOL isReverseAxis =
+            [nextAxisDirection isEqualToString:@"up"] ||
+            [nextAxisDirection isEqualToString:@"left"];
+        BOOL canResolveReverseAxis = YES;
+        CGFloat childMainAxisExtent = 0;
+        if (foundLayoutOffset && isReverseAxis) {
+            BOOL foundChildSize = NO;
+            CGSize childSize = [self boxSizeFromInspectorNode:node
+                                                       found:&foundChildSize];
+            childMainAxisExtent = [nextAxisDirection isEqualToString:@"up"]
+                ? childSize.height
+                : childSize.width;
+            canResolveReverseAxis = foundChildSize &&
+                isfinite(nextSliverPaintExtent);
+        }
         if (foundLayoutOffset &&
-            ([nextAxisDirection isEqualToString:@"down"] ||
-             [nextAxisDirection isEqualToString:@"right"])) {
+            (isForwardAxis || (isReverseAxis && canResolveReverseAxis))) {
             BOOL foundCrossAxisOffset = NO;
             CGFloat crossAxisOffset =
                 [self sliverCrossAxisOffsetFromInspectorNode:node
@@ -876,7 +1003,17 @@ static NSString *KKFIPointDescription(CGPoint point) {
             // clamped to zero the same -scrollOffset shows up in its
             // paintOffset instead, so the two never double count.
             CGFloat mainAxisOffset = layoutOffset - nextScrollOffset;
-            CGPoint localOffset = [nextAxisDirection isEqualToString:@"down"]
+            if (isReverseAxis) {
+                // RenderSliverHelpers mirrors box children around the sliver's
+                // paint extent for AxisDirection.up/left. PageView uses left
+                // in RTL, while reverse vertical lists use up.
+                mainAxisOffset = nextSliverPaintExtent -
+                    childMainAxisExtent - mainAxisOffset;
+            }
+            BOOL isVerticalAxis =
+                [nextAxisDirection isEqualToString:@"down"] ||
+                [nextAxisDirection isEqualToString:@"up"];
+            CGPoint localOffset = isVerticalAxis
                 ? CGPointMake(nextPaintOffset.x + crossAxisOffset,
                               nextPaintOffset.y + mainAxisOffset)
                 : CGPointMake(nextPaintOffset.x + mainAxisOffset,
@@ -913,6 +1050,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
             nextBaseOffset = absoluteOffset;
             nextPaintOffset = CGPointZero;
             nextScrollOffset = 0;
+            nextSliverPaintExtent = NAN;
         } else if (!foundPaintOffset && nextInsideViewport &&
                    !renderObjectAlreadySeen) {
             BOOL foundBoxOffset = NO;
@@ -934,6 +1072,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                                                    targetObjectIDs:targetObjectIDs
                                                     axisDirection:nextAxisDirection
                                                       scrollOffset:nextScrollOffset
+                                                sliverPaintExtent:nextSliverPaintExtent
                                                 sliverPaintOffset:nextPaintOffset
                                                         baseOffset:nextBaseOffset
                                                       isScrollRoot:NO
@@ -997,13 +1136,100 @@ static NSString *KKFIPointDescription(CGPoint point) {
     if (!isfinite(parsedScrollOffset)) {
         return NO;
     }
+    NSString *parsedAxisDirection =
+        [description substringWithRange:[axisMatch rangeAtIndex:1]];
+    NSRegularExpression *growthRegex = [NSRegularExpression
+        regularExpressionWithPattern:@"GrowthDirection\\.(forward|reverse)"
+                             options:0
+                               error:nil];
+    NSTextCheckingResult *growthMatch =
+        [growthRegex firstMatchInString:description
+                                options:0
+                                  range:NSMakeRange(0, description.length)];
+    BOOL reversesAxis = growthMatch.numberOfRanges == 2 &&
+        [[description substringWithRange:[growthMatch rangeAtIndex:1]]
+            isEqualToString:@"reverse"];
+    if (reversesAxis) {
+        NSDictionary<NSString *, NSString *> *oppositeDirections = @{
+            @"down" : @"up", @"up" : @"down",
+            @"right" : @"left", @"left" : @"right",
+        };
+        parsedAxisDirection = oppositeDirections[parsedAxisDirection]
+            ?: parsedAxisDirection;
+    }
     if (axisDirection != NULL) {
-        *axisDirection = [description substringWithRange:[axisMatch rangeAtIndex:1]];
+        *axisDirection = parsedAxisDirection;
     }
     if (scrollOffset != NULL) {
         *scrollOffset = parsedScrollOffset;
     }
     return YES;
+}
+
+- (CGFloat)sliverPaintExtentFromInspectorNode:(NSDictionary *)node
+                                         found:(BOOL *)found {
+    NSDictionary *renderObject = [self renderObjectPropertyFromInspectorNode:node];
+    NSArray *properties = [renderObject[@"properties"] isKindOfClass:NSArray.class]
+        ? renderObject[@"properties"]
+        : @[];
+    NSString *description = [self inspectorDescriptionForProperty:
+        [self inspectorPropertyNamed:@"geometry" inProperties:properties]];
+    NSRegularExpression *regex = [NSRegularExpression
+        regularExpressionWithPattern:@"paintExtent:\\s*([-+0-9.eE]+)"
+                             options:0
+                               error:nil];
+    NSTextCheckingResult *match =
+        [regex firstMatchInString:description ?: @""
+                          options:0
+                            range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges == 2) {
+        CGFloat value = [[description substringWithRange:[match rangeAtIndex:1]]
+            doubleValue];
+        if (isfinite(value)) {
+            if (found != NULL) {
+                *found = YES;
+            }
+            return value;
+        }
+    }
+    if (found != NULL) {
+        *found = NO;
+    }
+    return 0;
+}
+
+- (CGSize)boxSizeFromInspectorNode:(NSDictionary *)node found:(BOOL *)found {
+    NSDictionary *renderObject = [self renderObjectPropertyFromInspectorNode:node];
+    NSArray *properties = [renderObject[@"properties"] isKindOfClass:NSArray.class]
+        ? renderObject[@"properties"]
+        : @[];
+    NSString *description = [self inspectorDescriptionForProperty:
+        [self inspectorPropertyNamed:@"size" inProperties:properties]];
+    NSRegularExpression *regex = [NSRegularExpression
+        regularExpressionWithPattern:
+            @"Size\\(\\s*([-+0-9.eE]+)\\s*,\\s*([-+0-9.eE]+)\\s*\\)"
+                             options:0
+                               error:nil];
+    NSTextCheckingResult *match =
+        [regex firstMatchInString:description ?: @""
+                          options:0
+                            range:NSMakeRange(0, description.length)];
+    if (match.numberOfRanges == 3) {
+        CGFloat width = [[description substringWithRange:[match rangeAtIndex:1]]
+            doubleValue];
+        CGFloat height = [[description substringWithRange:[match rangeAtIndex:2]]
+            doubleValue];
+        if (isfinite(width) && isfinite(height)) {
+            if (found != NULL) {
+                *found = YES;
+            }
+            return CGSizeMake(width, height);
+        }
+    }
+    if (found != NULL) {
+        *found = NO;
+    }
+    return CGSizeZero;
 }
 
 - (CGPoint)sliverPaintOffsetFromInspectorNode:(NSDictionary *)node
@@ -1707,4 +1933,3 @@ static NSString *KKFIPointDescription(CGPoint point) {
 
 
 @end
-
