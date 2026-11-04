@@ -34,6 +34,10 @@
 #import "PVWindowInfo.h"
 
 static NSString * const PVClientLANBlockedByUSBMessage = @"当前 App 已经通过 USB 连接，请先断开 USB。";
+// Large Flutter pages may need two network hops plus hierarchy serialization.
+// Keep fast operations on their existing short deadlines; only hierarchy
+// payloads use this extended timeout.
+static NSTimeInterval const PVLargeInspectionResponseTimeout = 60.0;
 
 @interface PickViewClient () <PVEndpointDiscovererDelegate, PVClientSessionDelegate, PVClientSessionManagerDelegate>
 
@@ -183,7 +187,10 @@ static NSString * const PVClientLANBlockedByUSBMessage = @"当前 App 已经通�
         return;
     }
 
-    [session sendRequestType:PVRequestTypeHierarchy payload:payload timeoutInterval:10 completion:^(NSData *responsePayload, NSError *error) {
+    [session sendRequestType:PVRequestTypeHierarchy
+                     payload:payload
+             timeoutInterval:PVLargeInspectionResponseTimeout
+                  completion:^(NSData *responsePayload, NSError *error) {
         if (error) {
             [self notifyInspectionError:error endpointIdentifier:endpointIdentifier];
             return;
@@ -233,7 +240,10 @@ static NSString * const PVClientLANBlockedByUSBMessage = @"当前 App 已经通�
         return;
     }
 
-    [session sendRequestType:PVRequestTypeHierarchyDetails payload:payload timeoutInterval:10 completion:^(NSData *responsePayload, NSError *error) {
+    [session sendRequestType:PVRequestTypeHierarchyDetails
+                     payload:payload
+             timeoutInterval:PVLargeInspectionResponseTimeout
+                  completion:^(NSData *responsePayload, NSError *error) {
         if (error) {
             [self notifyInspectionError:error endpointIdentifier:endpointIdentifier];
             return;

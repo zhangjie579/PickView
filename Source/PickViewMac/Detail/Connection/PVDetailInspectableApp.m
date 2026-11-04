@@ -22,6 +22,11 @@
 
 @end
 
+// Hierarchy responses can include a full Flutter page and image data. The
+// Android Studio relay adds a second network hop, so these operations need a
+// larger deadline than lightweight inspection requests.
+static NSTimeInterval const PVDetailLargeInspectionResponseTimeout = 60.0;
+
 static NSError *PVDetailUnsupportedCapabilityError(void) {
     return [NSError errorWithDomain:PVErrorDomain
                                code:PVErrorCodeUnsupportedEndpoint
@@ -49,7 +54,9 @@ static NSError *PVDetailUnsupportedCapabilityError(void) {
 }
 
 - (RACSignal *)fetchHierarchyData {
-    return [self requestWithType:PVRequestTypeHierarchy payload:nil timeoutInterval:10];
+    return [self requestWithType:PVRequestTypeHierarchy
+                         payload:nil
+                 timeoutInterval:PVDetailLargeInspectionResponseTimeout];
 }
 
 - (RACSignal *)sendInspectorSettings:(NSDictionary<NSString *, id> *)settings {
@@ -99,7 +106,7 @@ static NSError *PVDetailUnsupportedCapabilityError(void) {
         __block BOOL disposed = NO;
         [self.requestClient sendRequestType:PVRequestTypeHierarchyDetails
                                      object:(id<NSSecureCoding>)packages
-                            timeoutInterval:15
+                            timeoutInterval:PVDetailLargeInspectionResponseTimeout
                                  completion:^(id data, BOOL finished, NSError *error) {
             @strongify(self);
             if (!self) return;

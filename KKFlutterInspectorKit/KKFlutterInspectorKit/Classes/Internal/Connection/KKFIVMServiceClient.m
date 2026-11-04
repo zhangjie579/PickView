@@ -1,6 +1,11 @@
 #import "KKFIVMServiceClient.h"
 
 static NSString *const KKFIVMServiceErrorDomain = @"KKFIVMServiceErrorDomain";
+// Keep this aligned with PVServerSessionMaxResponsePayloadBytes. A hierarchy
+// fetched through the Android Studio relay must survive the VM Service hop
+// before PickView can package and return it to the Mac.
+static NSUInteger const KKFIVMServiceMaximumMessageSizeBytes =
+    64u * 1024u * 1024u;
 
 typedef NS_ENUM(NSInteger, KKFIVMServiceErrorCode) {
     KKFIVMServiceErrorInvalidURI = 1,
@@ -64,7 +69,7 @@ typedef NS_ENUM(NSInteger, KKFIVMServiceErrorCode) {
         // WebSocket message limit on widget-rich or deeply nested pages.
         // Keep a bounded allowance so a valid VM Service response is not
         // reported as NSPOSIXError "Message too long" before JSON decoding.
-        task.maximumMessageSize = 16 * 1024 * 1024;
+        task.maximumMessageSize = KKFIVMServiceMaximumMessageSizeBytes;
         self.task = task;
         [task resume];
         [self receiveNextMessageForTask:task generation:generation];
