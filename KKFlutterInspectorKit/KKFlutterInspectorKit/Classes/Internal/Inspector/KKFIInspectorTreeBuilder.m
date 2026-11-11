@@ -185,7 +185,14 @@ static NSString *const KKFIInspectorTreeBuilderErrorDomain =
     // dropping the node because it has no drawable area.
     BOOL hasGeometry = objectID.length > 0 && foundSize &&
         (isSpacingContent || (size.width > 0 && size.height > 0));
-    BOOL isVisual = hasGeometry && [hierarchyRole isEqualToString:@"visual"];
+    BOOL isChildrenLayout =
+        [hierarchyRole isEqualToString:@"childrenLayout"];
+    // Multi-child layout widgets are part of the inspectable hierarchy too.
+    // They used to be represented only as a relation on the nearest visual
+    // ancestor, which promoted their children and made Row, Column, Stack,
+    // and the rest of this family disappear from the layer tree.
+    BOOL isVisual = hasGeometry &&
+        ([hierarchyRole isEqualToString:@"visual"] || isChildrenLayout);
     BOOL isRoot = forcedObjectID.length > 0;
     BOOL fillsVisualParent = hasVisualParentSize && foundSize &&
         fabs(size.width - visualParentSize.width) < 0.01 &&
@@ -205,9 +212,7 @@ static NSString *const KKFIInspectorTreeBuilderErrorDomain =
     NSArray<NSDictionary *> *nextLayoutModifiers = layoutModifiers;
     NSArray<NSDictionary *> *nextInteractions = interactions;
     NSArray<NSDictionary *> *nextSemantics = semantics;
-    if ([hierarchyRole isEqualToString:@"childrenLayout"]) {
-        [childrenLayoutsForVisualParent addObject:relation];
-    } else if ([hierarchyRole isEqualToString:@"layoutModifier"]) {
+    if ([hierarchyRole isEqualToString:@"layoutModifier"]) {
         nextLayoutModifiers =
             [layoutModifiers arrayByAddingObject:relation];
     } else if ([hierarchyRole isEqualToString:@"interaction"]) {
@@ -226,6 +231,11 @@ static NSString *const KKFIInspectorTreeBuilderErrorDomain =
                             children:childrenJSON];
     NSMutableArray<KKFIInspectorElement *> *children = [NSMutableArray array];
     NSMutableArray<NSDictionary *> *childLayouts = [NSMutableArray array];
+    if (isChildrenLayout) {
+        // Keep the layout policy available in the node's detail panel now that
+        // the layout widget owns its own hierarchy row.
+        [childLayouts addObject:relation];
+    }
     NSMutableArray<NSDictionary *> *nextChildrenLayouts =
         isVisual ? childLayouts : childrenLayoutsForVisualParent;
     CGPoint nextAccumulatedOffset = isVisual ? CGPointZero : combinedOffset;

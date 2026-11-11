@@ -53,7 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL hasFrame;
 @property(nonatomic, copy, readonly) NSDictionary *rawJSON;
 /// Multi-child layout policies, such as Column and Stack, that manage this
-/// element's visible children without occupying their own hierarchy row.
+/// element's visible children.
 @property(nonatomic, copy, readonly) NSArray<NSDictionary *> *childrenLayouts;
 /// Single-child layout wrappers, such as Padding and Align, folded into this
 /// visible element.
