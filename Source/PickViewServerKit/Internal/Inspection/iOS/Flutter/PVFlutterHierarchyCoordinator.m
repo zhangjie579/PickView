@@ -12,6 +12,7 @@
 #import "PVFlutterInspectionModel.h"
 #import "PVObject.h"
 #import "PVStaticAsyncUpdateTask.h"
+#import "UIImage+PVInspectDownsample.h"
 
 /// Whether anything inside this subtree can produce pixels.
 ///
@@ -1285,7 +1286,8 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                             task:task
                           record:record];
         if (image) {
-            NSData *data = UIImagePNGRepresentation(image);
+            NSData *data = [UIImage pv_downsampledPNGDataForImage:image
+                                                   maxPixelLength:PVInspectScreenshotMaxPixelLength];
             detail.soloImageData = data;
             detail.soloScreenshot = image;
         }
@@ -1339,11 +1341,15 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
                                      completion:^(KKFIScreenshotResult *result,
                                                   NSError *error) {
         if (!error && result.image && result.pngData.length) {
+            // Kit 产出的是原生 scale 的完整截图，编码前统一降采样以压缩传输体积；
+            // 逻辑点尺寸不变，Mac 端布局不受影响。
+            NSData *pngData = [UIImage pv_downsampledPNGDataForImage:result.image
+                                                      maxPixelLength:PVInspectScreenshotMaxPixelLength];
             if (task.taskType == PVStaticAsyncUpdateTaskTypeSoloScreenshot) {
-                detail.soloImageData = result.pngData;
+                detail.soloImageData = pngData;
                 detail.soloScreenshot = result.image;
             } else {
-                detail.groupImageData = result.pngData;
+                detail.groupImageData = pngData;
                 detail.groupScreenshot = result.image;
             }
 //            NSLog(@"PV_FLUTTER_SCREENSHOT_OK widget=%@ renderObject=%@ task=%@ "
@@ -1410,7 +1416,8 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
 //              element.widgetType, info[@"provider"], source, info[@"fit"],
 //              info[@"scale"], info[@"opacity"],
 //              NSStringFromCGSize(painted.size));
-        detail.soloImageData = UIImagePNGRepresentation(painted);
+        detail.soloImageData = [UIImage pv_downsampledPNGDataForImage:painted
+                                                       maxPixelLength:PVInspectScreenshotMaxPixelLength];
         detail.soloScreenshot = painted;
         completion(YES);
     }];

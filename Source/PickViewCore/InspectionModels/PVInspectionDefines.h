@@ -156,6 +156,14 @@ enum {
 /// Max pixel size of a SCNNode object. It is designated by SceneKit.
 static const double PVNodeImageMaxLengthInPx = 16384;
 
+/// 截图在编码前的降采样上限（最长像素边），单位是 px。超出该值的截图会先
+/// 缩到上限以内再编码，输出的逻辑点尺寸不变，只降低像素密度。选取该值时
+/// 需保证大于 Mac 端 Retina 画布的常见显示尺寸（2x~3x），以免预览发虚。
+/// Max pixel length (in px) of screenshots before encoding; longer screenshots
+/// are downsampled first. The logical point size is unchanged, only the pixel
+/// density is reduced.
+static const double PVInspectScreenshotMaxPixelLength = 2048;
+
 typedef NS_OPTIONS(NSUInteger, PVPreviewBitMask) {
     PVPreviewBitMask_None = 0,
     

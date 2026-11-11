@@ -33,6 +33,7 @@
 #import "PVTuple.h"
 #import "PVUIKitAttributeAccessors.h"
 #import "PVWindowInfo.h"
+#import "UIImage+PVInspectDownsample.h"
 
 #import "PVFlutterHierarchyCoordinator.h"
 
@@ -1526,7 +1527,9 @@
     UIGraphicsEndImageContext();
     [self restoreHiddenSubviews:hiddenSubviews];
 
-    return image ? UIImagePNGRepresentation(image) : nil;
+    // 编码前降采样：逻辑点尺寸不变，只降低像素密度，布局与像素换算不受影响
+    return image ? [UIImage pv_downsampledPNGDataForImage:image
+                                          maxPixelLength:PVInspectScreenshotMaxPixelLength] : nil;
 }
 
 - (NSData *)imageDataForLayer:(CALayer *)layer includeSublayers:(BOOL)includeSublayers lowQuality:(BOOL)lowQuality {
@@ -1557,7 +1560,9 @@
     UIGraphicsEndImageContext();
     [self restoreHiddenSublayers:visibleSublayers];
 
-    return image ? UIImagePNGRepresentation(image) : nil;
+    // 编码前降采样：逻辑点尺寸不变，只降低像素密度，布局与像素换算不受影响
+    return image ? [UIImage pv_downsampledPNGDataForImage:image
+                                          maxPixelLength:PVInspectScreenshotMaxPixelLength] : nil;
 }
 
 - (NSArray<CALayer *> *)hideVisibleSublayersOfLayer:(CALayer *)layer {
