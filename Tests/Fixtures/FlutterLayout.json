@@ -1,0 +1,24 @@
+{
+  "row": {
+    "renderObject": {
+      "properties": [
+        {
+          "name": "mainAxisAlignment",
+          "description": "start"
+        },
+        {
+          "name": "crossAxisAlignment",
+          "description": "center"
+        },
+        {
+          "name": "textBaseline",
+          "description": "alphabetic"
+        }
+      ]
+    }
+  },
+  "child": {
+    "flexFactor": 1,
+    "flexFit": "loose"
+  }
+}
