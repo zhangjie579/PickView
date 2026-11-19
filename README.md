@@ -123,6 +123,8 @@ dns-sd -B _pickview._tcp local.
 
 ### Flutter 调试说明
 
+选中 Flutter Widget 后，可在右侧属性面板切换 **显示 Widget 子树**，控制该节点及其全部后代在 PickView 2D / 3D 预览中的显示。层级树保留，便于重新选中并恢复；这项操作仅控制检查器预览，不修改被检查 App 的实际 UI。
+
 - iOS 的 `PickViewServer` 会自动带入并使用 `KKFlutterInspectorKit`，不需要业务侧单独声明或初始化 InspectorKit。
 - Flutter Engine 必须处于 Debug；部分 Profile 构建可能可用，Release 构建不可用。
 - 常规 Xcode/Simulator 调试不需要手动配置 VM Service URI、MethodChannel 或日志解析。Android Studio + iPhone 真机的 relay 例外，见下文。

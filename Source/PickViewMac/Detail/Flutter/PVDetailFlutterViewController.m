@@ -7,6 +7,7 @@
 #import "PVDetailFlutterViewController.h"
 
 #import "PVDisplayItem.h"
+#import "PVDetailHierarchyDataSource.h"
 #import "PVFlutterInspectionModel.h"
 #import "PVDetailDashboardCardTitleControl.h"
 #import "PVDetailNumberInputView.h"
@@ -1587,6 +1588,8 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 @interface PVDetailFlutterViewController ()
 @property(nonatomic, strong) PVFlutterInspectorHeaderView *headerView;
 @property(nonatomic, strong) PVFlutterInspectorTabBar *domainControl;
+@property(nonatomic, strong) NSButton *previewVisibilityButton;
+@property(nonatomic, strong) RACDisposable *previewVisibilitySubscription;
 @property(nonatomic, strong) NSScrollView *scrollView;
 @property(nonatomic, strong) PVDetailBaseView *documentView;
 @property(nonatomic, strong) PVDetailLabel *emptyLabel;
@@ -1618,6 +1621,14 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     };
     [root addSubview:self.domainControl];
 
+    self.previewVisibilityButton = [NSButton checkboxWithTitle:@"显示 Widget 子树"
+                                                       target:self
+                                                       action:@selector(togglePreviewVisibility:)];
+    self.previewVisibilityButton.identifier = @"FlutterPreviewVisibility";
+    self.previewVisibilityButton.toolTip = @"在 2D / 3D 预览中显示或隐藏该 Widget 及其全部子节点";
+    self.previewVisibilityButton.hidden = YES;
+    [root addSubview:self.previewVisibilityButton];
+
     self.documentView = [PVDetailBaseView new];
     [self.documentView addSubview:self.headerView];
     self.scrollView = [NSScrollView new];
@@ -1637,6 +1648,39 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     return root;
 }
 
+- (void)setDataSource:(PVDetailHierarchyDataSource *)dataSource {
+    [self.previewVisibilitySubscription dispose];
+    _dataSource = dataSource;
+    @weakify(self);
+    self.previewVisibilitySubscription = [[[dataSource.itemDidChangeNoPreview deliverOnMainThread]
+        takeUntil:self.rac_willDeallocSignal] subscribeNext:^(id value) {
+        @strongify(self);
+        [self updatePreviewVisibilityButton];
+    }];
+    [self updatePreviewVisibilityButton];
+}
+
+- (void)updatePreviewVisibilityButton {
+    self.previewVisibilityButton.hidden = !self.displayItem.pv_isFlutterItem;
+    self.previewVisibilityButton.enabled = self.dataSource != nil;
+    self.previewVisibilityButton.state = self.displayItem.inHiddenPreviewSubtree
+        ? NSControlStateValueOff : NSControlStateValueOn;
+    [self.view setNeedsLayout:YES];
+}
+
+- (void)togglePreviewVisibility:(NSButton *)sender {
+    PVDisplayItem *item = self.displayItem;
+    if (!item.pv_isFlutterItem || !self.dataSource) return;
+    if (sender.state == NSControlStateValueOn) {
+        [item enumerateSelfAndAncestors:^(PVDisplayItem *ancestor, BOOL *stop) {
+            ancestor.previewSubtreeHidden = NO;
+        }];
+    } else {
+        item.previewSubtreeHidden = YES;
+    }
+    [self.dataSource.itemDidChangeNoPreview sendNext:nil];
+}
+
 - (void)setDetail:(PVFlutterNodeDetail *)detail {
     NSString *signature = [self presentationSignatureForItem:self.displayItem detail:detail];
     if (_detail == detail && [self.detailSignature isEqualToString:signature]) return;
@@ -1646,13 +1690,15 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 }
 
 - (void)setDisplayItem:(PVDisplayItem *)displayItem {
+    BOOL sameItem = _displayItem == displayItem;
+    _displayItem = displayItem;
+    [self updatePreviewVisibilityButton];
     PVFlutterNodeDetail *detail = displayItem.flutterDetail;
     NSString *signature = [self presentationSignatureForItem:displayItem detail:detail];
-    if (_displayItem == displayItem && _detail == detail &&
+    if (sameItem && _detail == detail &&
         [self.detailSignature isEqualToString:signature]) {
         return;
     }
-    _displayItem = displayItem;
     _detail = detail;
     self.detailSignature = signature;
     [self scheduleReloadDetail];
@@ -1766,11 +1812,19 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     self.emptyLabel.frame = NSMakeRect(24, topInset + 24,
                                        MAX(0, width - 48),
                                        MAX(0, height - topInset - 48));
-    if (self.headerView.hidden) return;
-
     self.domainControl.frame = NSMakeRect(PVFlutterPanelInset, topInset + 10,
                                           MAX(0, width - PVFlutterPanelInset * 2), 24);
-    CGFloat scrollY = NSMaxY(self.domainControl.frame) + 9;
+    CGFloat scrollY = self.domainControl.hidden ? topInset + 10 : NSMaxY(self.domainControl.frame) + 9;
+    if (!self.previewVisibilityButton.hidden) {
+        self.previewVisibilityButton.frame = NSMakeRect(PVFlutterPanelInset, scrollY,
+            MAX(0, width - PVFlutterPanelInset * 2), 24);
+        scrollY = NSMaxY(self.previewVisibilityButton.frame) + 9;
+    }
+    if (self.headerView.hidden) {
+        self.emptyLabel.frame = NSMakeRect(24, scrollY + 10, MAX(0, width - 48),
+            MAX(0, height - scrollY - 24));
+        return;
+    }
     self.scrollView.frame = NSMakeRect(0, scrollY, width, MAX(0, height - scrollY));
 
     CGFloat documentWidth = MAX(0, NSWidth(self.scrollView.contentView.bounds));

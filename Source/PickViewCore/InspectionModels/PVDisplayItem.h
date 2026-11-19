@@ -109,6 +109,9 @@ typedef NS_ENUM(NSUInteger, PVDisplayItemProperty) {
 @property (nonatomic, assign) PVDoNotFetchScreenshotReason doNotFetchScreenshotReason;
 @property (nonatomic, weak, nullable) id previewLayer;
 @property (nonatomic, weak, nullable) id previewNode;
+/// Explicit user choice; unlike Flutter's noPreview, this also hides descendants.
+@property (nonatomic, assign) BOOL previewSubtreeHidden;
+@property (nonatomic, assign, readonly) BOOL inHiddenPreviewSubtree;
 @property (nonatomic, assign) BOOL noPreview;
 @property (nonatomic, assign, readonly) BOOL inNoPreviewHierarchy;
 @property (nonatomic, assign) NSInteger previewZIndex;

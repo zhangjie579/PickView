@@ -15,12 +15,17 @@
 #pragma mark - PVDetailHierarchyViewDelegate
 
 - (void)hierarchyView:(PVDetailHierarchyView *)view needToCancelPreviewOfItem:(PVDisplayItem *)item {
-    item.noPreview = YES;
+    if (item.pv_isFlutterItem) {
+        item.previewSubtreeHidden = YES;
+    } else {
+        item.noPreview = YES;
+    }
     [((PVDetailStaticHierarchyDataSource *)self.dataSource).itemDidChangeNoPreview sendNext:nil];
 }
 
 - (void)hierarchyView:(PVDetailHierarchyView *)view needToShowPreviewOfItem:(PVDisplayItem *)item {
     [item enumerateSelfAndAncestors:^(PVDisplayItem *item, BOOL *stop) {
+        item.previewSubtreeHidden = NO;
         if (item.noPreview) {
             item.noPreview = NO;
         }

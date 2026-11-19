@@ -101,6 +101,7 @@ NSString *const PVDetailAppShowConsoleNotificationName = @"PVDetailAppShowConsol
     [self addChildViewController:self.dashboardController];
 
     self.flutterController = [PVDetailFlutterViewController new];
+    self.flutterController.dataSource = dataSource;
     self.flutterController.view.hidden = YES;
     [self.splitTopView addSubview:self.flutterController.view positioned:NSWindowAbove relativeTo:self.dashboardController.view];
     [self addChildViewController:self.flutterController];
@@ -186,7 +187,9 @@ NSString *const PVDetailAppShowConsoleNotificationName = @"PVDetailAppShowConsol
         PVDisplayItem *item = dataSource.selectedItem;
         BOOL shouldShowNoPreviewTip = item.inNoPreviewHierarchy && item.doNotFetchScreenshotReason != PVDoNotFetchScreenshotForUserConfig;
         if (shouldShowNoPreviewTip || !self.noPreviewTipView.hidden) {
-            self.noPreviewTipView.title = item.pv_isFlutterItem
+            self.noPreviewTipView.title = item.inHiddenPreviewSubtree
+                ? @"选中的 Widget 子树已在预览中隐藏。"
+                : item.pv_isFlutterItem
                 ? NSLocalizedString(@"The selected Flutter node is not drawn as a separate 3D layer.", nil)
                 : [NSString stringWithFormat:NSLocalizedString(@"The screenshot of selected %@ is not displayed.", nil), item.title];
             self.noPreviewTipView.bindingObject = item;

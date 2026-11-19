@@ -40,6 +40,7 @@
 
 @property(nonatomic, strong) PVDetailBaseView *searchContainerView;
 @property(nonatomic, strong) PVDetailDashboardHeaderView *headerView;
+@property(nonatomic, strong) NSButton *flutterPreviewButton;
 @property(nonatomic, strong) NSMutableArray<PVDetailDashboardSearchPropView *> *searchPropViews;
 @property(nonatomic, strong) PVDetailDashboardSearchMethodsView *searchMethodsView;
 @property(nonatomic, strong) PVDetailDashboardSearchMethodsDataSource *methodsDataSource;
@@ -89,6 +90,13 @@
     self.headerView.delegate = self;
     [self.documentView addSubview:self.headerView];
     
+    self.flutterPreviewButton = [NSButton checkboxWithTitle:@"显示 Widget 子树"
+                                                   target:self
+                                                   action:@selector(_handleFlutterPreviewToggle:)];
+    self.flutterPreviewButton.toolTip = @"在 2D / 3D 预览中显示或隐藏选中的 Flutter Widget 及其全部子节点";
+    self.flutterPreviewButton.hidden = YES;
+    [self.documentView addSubview:self.flutterPreviewButton];
+
     self.cardContainerView = [PVDetailBaseView new];
     [self.documentView addSubview:self.cardContainerView];
     
@@ -137,6 +145,11 @@
         }];
     }
     
+    [[[[self currentDataSource].itemDidChangeNoPreview deliverOnMainThread] takeUntil:self.rac_willDeallocSignal] subscribeNext:^(id x) {
+        @strongify(self);
+        [self _updateFlutterPreviewButton];
+    }];
+
     [[NSNotificationCenter defaultCenter] addObserverForName:NotificationName_DidChangeSectionShowing object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         @strongify(self);
         [self reloadWithGroupList:[[self currentDataSource].selectedItem queryAllAttrGroupList]];
@@ -156,8 +169,14 @@
     
     $(self.headerView).width(contentWidth).x(DashboardHorInset).height(23).y(10);
     
+    CGFloat contentTop = self.headerView.$maxY + verMargin;
+    if (!self.flutterPreviewButton.hidden) {
+        $(self.flutterPreviewButton).x(DashboardHorInset).y(contentTop).width(contentWidth).height(24);
+        contentTop = self.flutterPreviewButton.$maxY + verMargin;
+    }
+
     if (!self.cardContainerView.hidden) {
-        $(self.cardContainerView).width(contentWidth).x(DashboardHorInset).y(self.headerView.$maxY + verMargin);
+        $(self.cardContainerView).width(contentWidth).x(DashboardHorInset).y(contentTop);
         
         __block CGFloat y = 0;
         
@@ -174,7 +193,7 @@
     }
     
     if (!self.searchContainerView.hidden) {
-        $(self.searchContainerView).width(contentWidth).x(DashboardHorInset).y(self.headerView.$maxY + verMargin);
+        $(self.searchContainerView).width(contentWidth).x(DashboardHorInset).y(contentTop);
         
         __block CGFloat y = 0;
         [self.searchPropViews enumerateObjectsUsingBlock:^(PVDetailDashboardSearchPropView * _Nonnull view, NSUInteger idx, BOOL * _Nonnull stop) {
@@ -196,8 +215,9 @@
 
 - (void)reloadWithGroupList:(NSArray<PVAttributesGroup *> *)list {
     self.groupList = list;
-    
-    if (list.count > 0) {
+    [self _updateFlutterPreviewButton];
+
+    if (list.count > 0 || !self.flutterPreviewButton.hidden) {
         self.scrollView.hidden = NO;
         self.emptyLabel.hidden = YES;
     } else {
@@ -231,6 +251,28 @@
     }];
     
     [self.view setNeedsLayout:YES];
+}
+
+- (void)_updateFlutterPreviewButton {
+    PVDisplayItem *item = [self currentDataSource].selectedItem;
+    self.flutterPreviewButton.hidden = !item.pv_isFlutterItem;
+    self.flutterPreviewButton.state = item.inHiddenPreviewSubtree ? NSControlStateValueOff : NSControlStateValueOn;
+    [self.view setNeedsLayout:YES];
+}
+
+- (void)_handleFlutterPreviewToggle:(NSButton *)sender {
+    PVDisplayItem *item = [self currentDataSource].selectedItem;
+    if (!item.pv_isFlutterItem) return;
+    if (sender.state == NSControlStateValueOn) {
+        // Showing a child also removes explicit hiding from its ancestors.
+        // Descendants hidden independently retain their own choice.
+        [item enumerateSelfAndAncestors:^(PVDisplayItem *ancestor, BOOL *stop) {
+            ancestor.previewSubtreeHidden = NO;
+        }];
+    } else {
+        item.previewSubtreeHidden = YES;
+    }
+    [[self currentDataSource].itemDidChangeNoPreview sendNext:nil];
 }
 
 - (RACSignal *)modifyAttribute:(PVAttribute *)attribute newValue:(id)newValue {

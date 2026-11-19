@@ -19,6 +19,7 @@
 
 @property (nonatomic, assign, readwrite) CGRect frameToRoot;
 @property (nonatomic, assign, readwrite) BOOL inNoPreviewHierarchy;
+@property (nonatomic, assign, readwrite) BOOL inHiddenPreviewSubtree;
 @property (nonatomic, assign) NSInteger indentLevel;
 @property (nonatomic, assign, readwrite) BOOL isExpandable;
 @property (nonatomic, assign, readwrite) BOOL inHiddenHierarchy;
@@ -82,6 +83,7 @@
     [coder encodeObject:self.danceuiSource forKey:@"danceuiSource"];
     [coder encodeInteger:self.doNotFetchScreenshotReason forKey:@"doNotFetchScreenshotReason"];
     [coder encodeBool:self.noPreview forKey:@"noPreview"];
+    [coder encodeBool:self.previewSubtreeHidden forKey:@"previewSubtreeHidden"];
 #if TARGET_OS_IPHONE
     [coder encodeCGRect:self.frame forKey:@"frame"];
     [coder encodeCGRect:self.bounds forKey:@"bounds"];
@@ -138,6 +140,7 @@
         _danceuiSource = [[coder decodeObjectForKey:@"danceuiSource"] copy];
         _doNotFetchScreenshotReason = [coder containsValueForKey:@"doNotFetchScreenshotReason"] ? [coder decodeIntegerForKey:@"doNotFetchScreenshotReason"] : PVFetchScreenshotPermitted;
         _noPreview = [coder decodeBoolForKey:@"noPreview"];
+        _previewSubtreeHidden = [coder containsValueForKey:@"previewSubtreeHidden"] && [coder decodeBoolForKey:@"previewSubtreeHidden"];
 #if TARGET_OS_IPHONE
         _frame = [coder decodeCGRectForKey:@"frame"];
         _bounds = [coder decodeCGRectForKey:@"bounds"];
@@ -210,6 +213,7 @@
     item.danceuiSource = self.danceuiSource;
     item.doNotFetchScreenshotReason = self.doNotFetchScreenshotReason;
     item.noPreview = self.noPreview;
+    item.previewSubtreeHidden = self.previewSubtreeHidden;
     item.subitems = [self.subitems pv_inspect_map:^id(NSUInteger idx, PVDisplayItem *value) { return value.copy; }];
     [item _updateDisplayingInHierarchyProperty];
     return item;
@@ -365,6 +369,14 @@
     }
 }
 
+- (void)setPreviewSubtreeHidden:(BOOL)previewSubtreeHidden {
+    if (_previewSubtreeHidden == previewSubtreeHidden) return;
+    _previewSubtreeHidden = previewSubtreeHidden;
+    // Recompute every descendant even if this node already has noPreview set
+    // for screenshot composition, so a logical Flutter wrapper still hides its tree.
+    [self _updateInNoPreviewHierarchy];
+}
+
 - (void)setNoPreview:(BOOL)noPreview {
     _noPreview = noPreview;
     [self _updateInNoPreviewHierarchy];
@@ -373,25 +385,26 @@
 - (void)setInNoPreviewHierarchy:(BOOL)inNoPreviewHierarchy {
     if (_inNoPreviewHierarchy == inNoPreviewHierarchy) return;
     _inNoPreviewHierarchy = inNoPreviewHierarchy;
-    [self.subitems enumerateObjectsUsingBlock:^(PVDisplayItem *obj, NSUInteger idx, BOOL *stop) {
-        [obj _updateInNoPreviewHierarchy];
-    }];
     [self _notifyDelegatesWith:PVDisplayItemProperty_InNoPreviewHierarchy];
 }
 
 - (void)_updateInNoPreviewHierarchy {
-    // A Flutter summary node can be a logical business widget without its own
-    // RenderObject while its visual descendants still have valid geometry.
-    // Keep the no-preview state local to each Flutter node so that such a
-    // wrapper does not suppress screenshots for its renderable children.
-    if (self.contentKind == PVDisplayItemContentKindFlutter) {
-        self.inNoPreviewHierarchy = self.noPreview;
-        return;
+    // Flutter's automatic noPreview is local: a logical wrapper may have
+    // renderable children. Explicit user hiding always covers the subtree.
+    BOOL subtreeHidden = self.previewSubtreeHidden || self.superItem.inHiddenPreviewSubtree;
+    BOOL subtreeHiddenChanged = self.inHiddenPreviewSubtree != subtreeHidden;
+    self.inHiddenPreviewSubtree = subtreeHidden;
+    BOOL inheritsNoPreview = self.contentKind != PVDisplayItemContentKindFlutter && self.superItem.inNoPreviewHierarchy;
+    self.inNoPreviewHierarchy = self.noPreview || self.inHiddenPreviewSubtree || inheritsNoPreview;
+    if (subtreeHiddenChanged) {
+        // A logical wrapper may already have noPreview; its row still needs
+        // to reflect the explicit user choice.
+        [self.rowViewDelegate displayItem:self propertyDidChange:PVDisplayItemProperty_InNoPreviewHierarchy];
     }
-    if (self.superItem.inNoPreviewHierarchy || self.noPreview) {
-        self.inNoPreviewHierarchy = YES;
-    } else {
-        self.inNoPreviewHierarchy = NO;
+    // Visit children even when our effective value is unchanged (for example,
+    // when a Flutter wrapper already has automatic noPreview).
+    for (PVDisplayItem *child in self.subitems) {
+        [child _updateInNoPreviewHierarchy];
     }
 }
 

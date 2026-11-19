@@ -236,6 +236,9 @@
     if (!item) {
         return NO;
     }
+    if (item.inHiddenPreviewSubtree) {
+        return YES;
+    }
     if (![item hasPreviewBoxAbility]) {
         return NO;
     }

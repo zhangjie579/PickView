@@ -782,7 +782,11 @@ extern NSString *const PVDetailAppShowConsoleNotificationName;
     [PVDetailTutorialManager sharedInstance].togglePreview = YES;
     
     PVDisplayItem *item = self.rightClickingDisplayItem;
-    item.noPreview = YES;
+    if (item.pv_isFlutterItem) {
+        item.previewSubtreeHidden = YES;
+    } else {
+        item.noPreview = YES;
+    }
     [self.dataSource.itemDidChangeNoPreview sendNext:nil];
 }
 

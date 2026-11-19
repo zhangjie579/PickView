@@ -61,6 +61,7 @@
         [self addChildViewController:self.dashboardController];
 
         self.flutterController = [PVDetailFlutterViewController new];
+        self.flutterController.dataSource = self.hierarchyDataSource;
         self.flutterController.view.hidden = YES;
         [self.splitRightView addSubview:self.flutterController.view];
         [self addChildViewController:self.flutterController];
