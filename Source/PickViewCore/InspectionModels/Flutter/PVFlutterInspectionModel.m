@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <stdlib.h>
 //
 //  PVFlutterInspectionModel.m
 //  PickViewCore
@@ -238,3 +240,84 @@
 
 #undef PV_COPY_STRING
 #undef PV_ENCODE_OBJECT
+
+@implementation PVFlutterLayoutEditing
++ (NSArray<NSString *> *)enumValuesForProperty:(NSString *)property {
+    return @{
+        @"mainAxisAlignment": @[@"MainAxisAlignment.start", @"MainAxisAlignment.end", @"MainAxisAlignment.center", @"MainAxisAlignment.spaceBetween", @"MainAxisAlignment.spaceAround", @"MainAxisAlignment.spaceEvenly"],
+        @"crossAxisAlignment": @[@"CrossAxisAlignment.start", @"CrossAxisAlignment.end", @"CrossAxisAlignment.center", @"CrossAxisAlignment.stretch", @"CrossAxisAlignment.baseline"],
+        @"flexFit": @[@"FlexFit.tight", @"FlexFit.loose"]
+    }[property] ?: @[];
+}
++ (NSDictionary<NSString *, NSString *> *)valuesFromLayoutNode:(NSDictionary *)node {
+    if (![node isKindOfClass:NSDictionary.class]) return @{};
+    NSMutableDictionary *values = [NSMutableDictionary dictionary];
+    NSDictionary *render = [node[@"renderObject"] isKindOfClass:NSDictionary.class] ? node[@"renderObject"] : @{};
+    NSArray *properties = [render[@"properties"] isKindOfClass:NSArray.class] ? render[@"properties"] : @[];
+    for (id property in properties) {
+        if (![property isKindOfClass:NSDictionary.class]) continue;
+        NSString *name = property[@"name"];
+        NSString *description = [property[@"description"] isKindOfClass:NSString.class] ? property[@"description"] : nil;
+        if (![name isKindOfClass:NSString.class] || !description) continue;
+        NSArray *options = [self enumValuesForProperty:name];
+        for (NSString *option in options) {
+            if ([description isEqualToString:option] || [description isEqualToString:option.pathExtension]) values[name] = option;
+        }
+        if ([name isEqualToString:@"textBaseline"] &&
+            ([description isEqualToString:@"TextBaseline.alphabetic"] || [description isEqualToString:@"TextBaseline.ideographic"] ||
+             [description isEqualToString:@"alphabetic"] || [description isEqualToString:@"ideographic"])) {
+            values[@"textBaseline"] = description;
+        }
+    }
+    if (!values[@"mainAxisAlignment"] || !values[@"crossAxisAlignment"]) {
+        [values removeObjectForKey:@"mainAxisAlignment"];
+        [values removeObjectForKey:@"crossAxisAlignment"];
+    }
+    id factor = node[@"flexFactor"];
+    if ([factor isKindOfClass:NSNumber.class] || [factor isKindOfClass:NSString.class]) values[@"flexFactor"] = [factor description];
+    if (factor == NSNull.null) values[@"flexFactor"] = @"null";
+    NSString *fit = [node[@"flexFit"] isKindOfClass:NSString.class] ? node[@"flexFit"] : nil;
+    for (NSString *option in [self enumValuesForProperty:@"flexFit"]) {
+        if ([fit isEqualToString:option] || [fit isEqualToString:option.pathExtension]) values[@"flexFit"] = option;
+    }
+    return values.copy;
+}
++ (NSDictionary *)operationForProperty:(NSString *)property value:(NSString *)value
+                         currentValues:(NSDictionary<NSString *, NSString *> *)values error:(NSError **)error {
+    NSString *operation = nil;
+    NSDictionary *parameters = nil;
+    BOOL valid = [value isKindOfClass:NSString.class] && values[property] != nil;
+    if ([property isEqualToString:@"mainAxisAlignment"] || [property isEqualToString:@"crossAxisAlignment"]) {
+        valid &= [[self enumValuesForProperty:property] containsObject:value];
+        NSMutableDictionary *axes = [NSMutableDictionary dictionary];
+        for (NSString *axis in @[@"mainAxisAlignment", @"crossAxisAlignment"]) {
+            NSString *entry = [axis isEqualToString:property] ? value : values[axis];
+            if (![[self enumValuesForProperty:axis] containsObject:entry ?: @""]) valid = NO;
+            if (entry) axes[axis] = entry;
+        }
+        if ([axes[@"crossAxisAlignment"] isEqualToString:@"CrossAxisAlignment.baseline"] && !values[@"textBaseline"]) valid = NO;
+        operation = @"setFlexProperties";
+        parameters = axes;
+    } else if ([property isEqualToString:@"flexFit"]) {
+        valid &= [[self enumValuesForProperty:property] containsObject:value];
+        operation = @"setFlexFit";
+        parameters = @{@"flexFit": value ?: @""};
+    } else if ([property isEqualToString:@"flexFactor"]) {
+        if (![value isEqualToString:@"null"]) {
+            const char *text = [value isKindOfClass:NSString.class] ? value.UTF8String : "";
+            char *end;
+            errno = 0;
+            long long factor = strtoll(text, &end, 10);
+            valid &= end != text && *end == '\0' && errno != ERANGE && factor >= 0;
+        }
+        operation = @"setFlexFactor";
+        parameters = @{@"flexFactor": value ?: @""};
+    } else valid = NO;
+    if (!valid) {
+        if (error) *error = [NSError errorWithDomain:@"PVFlutterLayout" code:2 userInfo:@{
+            NSLocalizedDescriptionKey: @"属性值无效或当前节点不支持修改。flex 需要非负整数或 null；baseline 需要已设置 textBaseline。"}];
+        return nil;
+    }
+    return @{@"operation": operation, @"parameters": parameters};
+}
+@end

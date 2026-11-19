@@ -22,6 +22,8 @@ typedef void (^KKFlutterInspectorPropertiesCompletion)(
 typedef void (^KKFlutterInspectorScreenshotCompletion)(
     KKFIScreenshotResult *_Nullable result, NSError *_Nullable error);
 
+typedef void (^KKFlutterInspectorLayoutCompletion)(NSDictionary * _Nullable result, NSError * _Nullable error);
+
 @interface KKFlutterInspector : NSObject
 
 /// Widget runtime type names omitted from hierarchy snapshots. Children of an
@@ -53,8 +55,13 @@ typedef void (^KKFlutterInspectorScreenshotCompletion)(
 - (void)fetchPropertiesForElement:(KKFIElementReference *)reference
                        completion:(KKFlutterInspectorPropertiesCompletion)completion;
 
-/// Captures the pixels represented by an element in the current hierarchy
-/// snapshot.
+/// getLayoutExplorerNode, setFlexProperties, setFlexFactor, or setFlexFit only.
+- (void)performLayoutOperation:(NSString *)operation
+                    parameters:(NSDictionary<NSString *, NSString *> *)parameters
+                    forElement:(KKFIElementReference *)reference
+                    completion:(KKFlutterInspectorLayoutCompletion)completion;
+
+/// Captures the pixels represented by an element in the current hierarchy snapshot.
 - (void)captureScreenshotForElement:(KKFIElementReference *)reference
                             options:(KKFIScreenshotOptions *)options
                          completion:(KKFlutterInspectorScreenshotCompletion)completion;

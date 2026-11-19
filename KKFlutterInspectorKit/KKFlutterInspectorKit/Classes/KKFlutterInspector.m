@@ -186,6 +186,23 @@ typedef NS_ENUM(NSInteger, KKFlutterInspectorErrorCode) {
     });
 }
 
+- (void)performLayoutOperation:(NSString *)operation
+                    parameters:(NSDictionary<NSString *, NSString *> *)parameters
+                    forElement:(KKFIElementReference *)reference
+                    completion:(KKFlutterInspectorLayoutCompletion)completion {
+    dispatch_async(self.callbackQueue, ^{
+        KKFIInspectorSession *session = self.sessionsBySnapshotID[reference.snapshotID];
+        if (!session) {
+            completion(nil, [self.class errorForUnknownSnapshot]);
+            return;
+        }
+        [session performLayoutOperation:operation parameters:parameters forElement:reference
+                            completion:^(NSDictionary *result, NSError *error) {
+            dispatch_async(self.callbackQueue, ^{ completion(result, error); });
+        }];
+    });
+}
+
 - (void)captureScreenshotForElement:(KKFIElementReference *)reference
                             options:(KKFIScreenshotOptions *)options
                          completion:(KKFlutterInspectorScreenshotCompletion)completion {

@@ -29,6 +29,9 @@ typedef void (^PVFlutterHierarchyDetailsCompletion)(NSArray<PVDisplayItemDetail 
 /// immediately.
 - (void)performAfterPendingPreparation:(dispatch_block_t)block;
 
+- (void)performLayoutRequest:(NSDictionary *)request
+                  completion:(void (^)(NSDictionary * _Nullable result, NSError * _Nullable error))completion;
+
 - (BOOL)isFlutterHostView:(UIView *)view;
 - (BOOL)isFlutterHostLayer:(CALayer *)layer;
 - (NSArray<PVDisplayItem *> *)virtualItemsForHostView:(UIView *)hostView;

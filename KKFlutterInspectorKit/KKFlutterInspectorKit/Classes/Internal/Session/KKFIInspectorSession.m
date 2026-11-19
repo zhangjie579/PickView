@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <stdlib.h>
 #import "KKFIInspectorSession.h"
 #import "KKFlutterInspectorConfigure.h"
 
@@ -495,6 +497,80 @@ typedef NS_ENUM(NSUInteger, KKFIInspectorSessionState) {
                 }
             }
             completionCopy(properties.copy, nil);
+        }];
+    }];
+}
+
+#pragma mark - Official layout editing
+
+- (void)performLayoutOperation:(NSString *)operation
+                    parameters:(NSDictionary<NSString *, NSString *> *)parameters
+                    forElement:(KKFIElementReference *)reference
+                    completion:(KKFILayoutCompletion)completion {
+    NSDictionary *allowed = @{
+        @"getLayoutExplorerNode": @[],
+        @"setFlexProperties": @[@"mainAxisAlignment", @"crossAxisAlignment"],
+        @"setFlexFactor": @[@"flexFactor"],
+        @"setFlexFit": @[@"flexFit"]
+    };
+    NSArray *keys = allowed[operation];
+    BOOL valid = keys && parameters.count == keys.count;
+    for (NSString *key in keys) {
+        if (![parameters[key] isKindOfClass:NSString.class]) valid = NO;
+    }
+    NSDictionary *enums = @{
+        @"mainAxisAlignment": @[@"MainAxisAlignment.start", @"MainAxisAlignment.end", @"MainAxisAlignment.center", @"MainAxisAlignment.spaceBetween", @"MainAxisAlignment.spaceAround", @"MainAxisAlignment.spaceEvenly"],
+        @"crossAxisAlignment": @[@"CrossAxisAlignment.start", @"CrossAxisAlignment.end", @"CrossAxisAlignment.center", @"CrossAxisAlignment.stretch", @"CrossAxisAlignment.baseline"],
+        @"flexFit": @[@"FlexFit.tight", @"FlexFit.loose"]
+    };
+    for (NSString *key in enums) {
+        if (parameters[key] && ![enums[key] containsObject:parameters[key]]) valid = NO;
+    }
+    NSString *factor = parameters[@"flexFactor"];
+    if ([factor isKindOfClass:NSString.class] && ![factor isEqualToString:@"null"]) {
+        const char *text = factor.UTF8String;
+        char *end;
+        errno = 0;
+        long long number = strtoll(text, &end, 10);
+        if (end == text || *end != '\0' || errno == ERANGE || number < 0) valid = NO;
+    }
+    if (!valid) {
+        completion(nil, [self.class errorWithCode:KKFIInspectorSessionErrorInvalidPayload
+                                     description:@"Unsupported Flutter layout operation or invalid value."]);
+        return;
+    }
+    [self ensureCurrentConnectionWithTimeout:2.5 completion:^(NSError *connectionError) {
+        NSError *error = connectionError ?: [self validationErrorForReference:reference];
+        if (error) { completion(nil, error); return; }
+        NSMutableDictionary *params = [parameters mutableCopy];
+        params[@"isolateId"] = self.isolateID;
+        params[@"id"] = reference.objectID;
+        params[@"groupName"] = reference.objectGroup;
+        if ([operation isEqualToString:@"getLayoutExplorerNode"]) params[@"subtreeDepth"] = @"0";
+        [self.serviceClient callMethod:[@"ext.flutter.inspector." stringByAppendingString:operation]
+                                params:params completion:^(NSDictionary *response, NSError *rpcError) {
+            NSError *referenceError = [self validationErrorForReference:reference];
+            if (rpcError || referenceError) { completion(nil, rpcError ?: referenceError); return; }
+            id payload = [KKFIInspectorJSON normalizedPayloadFromResponse:response];
+            if ([operation isEqualToString:@"getLayoutExplorerNode"]) {
+                if (![payload isKindOfClass:NSDictionary.class] || ![payload count]) {
+                    completion(nil, [self.class errorWithCode:KKFIInspectorSessionErrorInvalidPayload
+                                                 description:@"Flutter Inspector returned no layout information."]);
+                    return;
+                }
+                completion(payload, nil);
+            } else if (![payload isKindOfClass:NSNumber.class] || ![payload boolValue]) {
+                completion(nil, [self.class errorWithCode:KKFIInspectorSessionErrorInvalidPayload
+                                             description:@"该 Flutter 节点不支持此属性修改，请刷新后重试。"]);
+            } else {
+                // Re-read runtime values rather than displaying an optimistic local value.
+                [self performLayoutOperation:@"getLayoutExplorerNode" parameters:@{}
+                                   forElement:reference completion:^(NSDictionary *node, NSError *readError) {
+                    // A failed readback must not misreport an applied mutation
+                    // as failed. The client will refresh the full hierarchy.
+                    completion(node ?: @{@"mutationApplied": @YES}, nil);
+                }];
+            }
         }];
     }];
 }

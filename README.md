@@ -125,6 +125,18 @@ dns-sd -B _pickview._tcp local.
 
 选中 Flutter Widget 后，可在右侧属性面板切换 **显示 Widget 子树**，控制该节点及其全部后代在 PickView 2D / 3D 预览中的显示。层级树保留，便于重新选中并恢复；这项操作仅控制检查器预览，不修改被检查 App 的实际 UI。
 
+右侧 Flutter 面板的 **实时布局** 区域支持官方 Layout Explorer 的全部可编辑属性：
+
+- `mainAxisAlignment`：主轴对齐，6 个枚举选项。
+- `crossAxisAlignment`：交叉轴对齐，5 个枚举选项；`baseline` 仅在节点已有 `textBaseline` 时可选。
+- `flex`：非负整数或 `null`，输入后按回车或点击“应用”。
+- `FlexFit`：`tight` / `loose` 下拉菜单。
+
+仅展示当前节点支持的修改入口。枚举选择后立即提交到运行中的 Flutter App，成功后回读实际值并刷新层级和截图；失败会显示错误并恢复原值。修改只作用于当前运行状态，不写回 Dart 源码，热重载或重建可能恢复。保存的快照仅供查看。
+
+使用此功能需要同时重新编译 PickView Mac 和被检查 App（包含更新后的 `PickViewServer`、`KKFlutterInspectorKit`）。未提供相应官方 Inspector extension 的 Flutter 版本会显示不支持的错误。
+
+
 - iOS 的 `PickViewServer` 会自动带入并使用 `KKFlutterInspectorKit`，不需要业务侧单独声明或初始化 InspectorKit。
 - Flutter Engine 必须处于 Debug；部分 Profile 构建可能可用，Release 构建不可用。
 - 常规 Xcode/Simulator 调试不需要手动配置 VM Service URI、MethodChannel 或日志解析。Android Studio + iPhone 真机的 relay 例外，见下文。

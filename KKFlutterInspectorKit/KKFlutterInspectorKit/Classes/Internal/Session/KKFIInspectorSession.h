@@ -19,6 +19,8 @@ typedef void (^KKFIScreenshotCompletion)(
     KKFIScreenshotResult *_Nullable result, NSError *_Nullable error);
 
 /// Owns one reusable VM Service connection for a Flutter engine.
+typedef void (^KKFILayoutCompletion)(NSDictionary * _Nullable result, NSError * _Nullable error);
+
 @interface KKFIInspectorSession : NSObject
 
 - (instancetype)initWithEngine:(FlutterEngine *)engine
@@ -40,6 +42,12 @@ typedef void (^KKFIScreenshotCompletion)(
 /// Fetches diagnostic properties for an element from the active snapshot.
 - (void)fetchPropertiesForElement:(KKFIElementReference *)reference
                        completion:(KKFIPropertiesCompletion)completion;
+
+/// getLayoutExplorerNode, setFlexProperties, setFlexFactor, or setFlexFit only.
+- (void)performLayoutOperation:(NSString *)operation
+                    parameters:(NSDictionary<NSString *, NSString *> *)parameters
+                    forElement:(KKFIElementReference *)reference
+                    completion:(KKFILayoutCompletion)completion;
 
 /// Captures the current pixels for an element from the active snapshot.
 - (void)captureScreenshotForElement:(KKFIElementReference *)reference

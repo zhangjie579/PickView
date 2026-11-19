@@ -62,6 +62,11 @@
 }
 
 #if TARGET_OS_IPHONE
+- (void)performFlutterLayoutRequest:(NSDictionary *)request
+                        completion:(void (^)(NSDictionary *, NSError *))completion {
+    [self.flutterCoordinator performLayoutRequest:request completion:completion];
+}
+
 - (void)prepareHierarchyForWindowID:(NSString *)windowID
                          completion:(void (^)(NSError *error))completion {
     dispatch_block_t work = ^{

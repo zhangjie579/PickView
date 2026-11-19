@@ -50,7 +50,8 @@
 }
 
 - (BOOL)canHandleRequestType:(uint32_t)type {
-    return type == PVRequestTypeHierarchyDetails ||
+    return type == PVRequestTypeFlutterLayout ||
+           type == PVRequestTypeHierarchyDetails ||
            type == PVRequestTypeModifyAttribute ||
            type == PVRequestTypeAttrModificationPatch ||
            type == PVRequestTypeInvokeMethod ||
@@ -75,6 +76,18 @@
     id request = [self objectFromPayload:payload error:&decodeError];
     if (!request) {
         [self finishWithAttachment:[PVResponseAttachment attachmentWithError:decodeError ?: [self invalidRequestError]] completion:completion];
+        return;
+    }
+
+    if (type == PVRequestTypeFlutterLayout) {
+        if (![request isKindOfClass:NSDictionary.class] ||
+            ![self.provider respondsToSelector:@selector(performFlutterLayoutRequest:completion:)]) {
+            [self finishWithAttachment:[PVResponseAttachment attachmentWithError:[self invalidRequestError]] completion:completion];
+            return;
+        }
+        [self.provider performFlutterLayoutRequest:request completion:^(NSDictionary *result, NSError *error) {
+            [self finishWithObject:result error:error completion:completion];
+        }];
         return;
     }
 

@@ -1007,6 +1007,26 @@ static NSDictionary *PVFlutterColorDictionaryFromDescription(
     return [self.pagesByHostLayer objectForKey:hostLayer].rootItems ?: @[];
 }
 
+- (void)performLayoutRequest:(NSDictionary *)request
+                  completion:(void (^)(NSDictionary *, NSError *))completion {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self performAfterPendingPreparation:^{
+            NSString *displayItemID = [request[@"displayItemID"] isKindOfClass:NSString.class] ? request[@"displayItemID"] : nil;
+            NSString *group = [request[@"objectGroup"] isKindOfClass:NSString.class] ? request[@"objectGroup"] : nil;
+            NSString *operation = [request[@"operation"] isKindOfClass:NSString.class] ? request[@"operation"] : nil;
+            NSDictionary *parameters = [request[@"parameters"] isKindOfClass:NSDictionary.class] ? request[@"parameters"] : nil;
+            PVFlutterNodeRecord *record = displayItemID ? self.recordsByDisplayItemID[displayItemID] : nil;
+            if (!record || ![record.element.reference.objectGroup isEqualToString:group] || !operation.length || !parameters) {
+                completion(nil, [NSError errorWithDomain:@"PVFlutterLayout" code:1 userInfo:@{
+                    NSLocalizedDescriptionKey: @"Flutter 节点已失效，请刷新层级后重试。"}]);
+                return;
+            }
+            [self.inspector performLayoutOperation:operation parameters:parameters
+                                       forElement:record.element.reference completion:completion];
+        }];
+    });
+}
+
 - (BOOL)ownsObjectOID:(unsigned long)oid {
     return self.recordsByOID[@(oid)] != nil;
 }

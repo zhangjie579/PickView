@@ -30,6 +30,8 @@ typedef NS_ENUM(uint32_t, PVRequestType) {
     /// Inspector 偏好设置由 Mac 端下发给被调试 app，例如 Flutter 层级过滤开关
     PVRequestTypeInspectorSettings = 233,
 
+    PVRequestTypeFlutterLayout = 234,
+
     PVRequestTypeCancelHierarchyDetails = 304
 };
 

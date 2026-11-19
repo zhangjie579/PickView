@@ -51,6 +51,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 @optional
 
+/// Official Flutter Inspector layout query/mutation; completion is asynchronous.
+- (void)performFlutterLayoutRequest:(NSDictionary *)request
+                        completion:(void (^)(NSDictionary * _Nullable result, NSError * _Nullable error))completion;
+
+
 /// Gives providers backed by an external runtime a chance to refresh their
 /// virtual hierarchy before the normal synchronous hierarchy snapshot runs.
 - (void)prepareHierarchyForWindowID:(nullable NSString *)windowID

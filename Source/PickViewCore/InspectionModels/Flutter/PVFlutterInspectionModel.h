@@ -76,4 +76,13 @@ typedef NS_ENUM(NSUInteger, PVFlutterDetailValueKind) {
 @property(nonatomic, copy, nullable) NSString *rawJSON;
 @end
 
+/// The complete editable property set provided by Flutter's layout explorer.
+@interface PVFlutterLayoutEditing : NSObject
++ (NSArray<NSString *> *)enumValuesForProperty:(NSString *)property;
++ (NSDictionary<NSString *, NSString *> *)valuesFromLayoutNode:(NSDictionary *)node;
++ (nullable NSDictionary *)operationForProperty:(NSString *)property value:(NSString *)value
+                                 currentValues:(NSDictionary<NSString *, NSString *> *)values
+                                         error:(NSError * _Nullable * _Nullable)error;
+@end
+
 NS_ASSUME_NONNULL_END

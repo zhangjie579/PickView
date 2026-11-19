@@ -130,16 +130,22 @@
     }
     
     unsigned long prevSelectedOid = 0;
+    NSString *prevFlutterSelectionID = nil;
+    NSMutableDictionary<NSString *, NSDictionary *> *prevFlutterState = [NSMutableDictionary dictionary];
     NSMutableDictionary *prevExpansionMap = nil;
     if (keepState) {
         BOOL preferViewOid = [PVDetailHelper appInfoLooksLikeMacTarget:self.rawHierarchyInfo.appInfo];
         prevSelectedOid = [self.selectedItem bestObjectOidPreferView:preferViewOid];
+        if (self.selectedItem.pv_isFlutterItem) prevFlutterSelectionID = self.selectedItem.objectID;
         
         prevExpansionMap = [NSMutableDictionary dictionary];
         [self.flatItems enumerateObjectsUsingBlock:^(PVDisplayItem * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
             unsigned long oid = [obj bestObjectOidPreferView:preferViewOid];
-            if (oid) {
+            if (oid && (!obj.pv_isFlutterItem || !obj.objectID.length)) {
                 prevExpansionMap[@(oid)] = @(obj.isExpanded);
+            }
+            if (obj.pv_isFlutterItem && obj.objectID.length) {
+                prevFlutterState[obj.objectID] = @{@"expanded": @(obj.isExpanded), @"hidden": @(obj.previewSubtreeHidden)};
             }
         }];
     }
@@ -150,6 +156,15 @@
     // 根据 subitems 属性打平为二维数组，同时给每个 item 设置 indentLevel
     self.rawFlatItems = [PVDisplayItem flatItemsFromHierarchicalItems:info.displayItems];
     NSArray<PVDisplayItem *> *flatItems = self.rawFlatItems.copy;
+    // Flutter virtual OIDs are newly allocated on each snapshot. Retain state
+    // using the Inspector element identity when a layout edit refreshes the tree.
+    for (PVDisplayItem *item in flatItems) {
+        NSDictionary *state = item.pv_isFlutterItem ? prevFlutterState[item.objectID] : nil;
+        if (!state) continue;
+        item.previewSubtreeHidden = [state[@"hidden"] boolValue];
+        unsigned long oid = [item bestObjectOidPreferView:NO];
+        if (oid) prevExpansionMap[@(oid)] = state[@"expanded"];
+    }
     
     // 设置 preferToBeCollapsed 属性
     NSSet<NSString *> *classesPreferredToCollapse = [NSSet setWithObjects:@"UILabel", @"UIPickerView", @"UIProgressView", @"UIActivityIndicatorView", @"UIAlertView", @"UIActionSheet", @"UISearchBar", @"UIButton", @"UITextView", @"UIDatePicker", @"UIPageControl", @"UISegmentedControl", @"UITextField", @"UISlider", @"UISwitch", @"UIVisualEffectView", @"UIImageView", @"WKCommonWebView", @"UITextEffectsWindow", nil];
@@ -216,6 +231,15 @@
     PVDisplayItem *shouldSelectedItem = nil;
     if (keepState) {
         PVDisplayItem *prevSelectedItem = [self displayItemWithOid:prevSelectedOid];
+        if (prevFlutterSelectionID.length) {
+            prevSelectedItem = nil;
+            for (PVDisplayItem *item in flatItems) {
+                if (item.pv_isFlutterItem && [item.objectID isEqualToString:prevFlutterSelectionID]) {
+                    prevSelectedItem = item;
+                    break;
+                }
+            }
+        }
         if (prevSelectedItem) {
             shouldSelectedItem = prevSelectedItem;
         }

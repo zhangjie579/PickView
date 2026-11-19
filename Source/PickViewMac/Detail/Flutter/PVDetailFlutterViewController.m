@@ -8,6 +8,11 @@
 
 #import "PVDisplayItem.h"
 #import "PVDetailHierarchyDataSource.h"
+#import "PVDetailStaticHierarchyDataSource.h"
+#import "PVDetailStaticAsyncUpdateManager.h"
+#import "PVDetailAppsManager.h"
+#import "PVHierarchyInfo.h"
+#import "PVDetailPreferenceManager.h"
 #import "PVFlutterInspectionModel.h"
 #import "PVDetailDashboardCardTitleControl.h"
 #import "PVDetailNumberInputView.h"
@@ -1585,10 +1590,157 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 
 @end
 
+@interface PVFlutterLayoutEditorView : PVDetailBaseView
+@property(nonatomic, copy) NSDictionary<NSString *, NSString *> *values;
+@property(nonatomic, copy) NSString *status;
+@property(nonatomic) BOOL busy;
+@property(nonatomic, copy) void (^changeValue)(NSString *property, NSString *value);
+@property(nonatomic, copy) void (^refresh)(void);
+@property(nonatomic, copy) void (^heightDidChange)(void);
+@property(nonatomic, strong) NSTextField *titleLabel;
+@property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, strong) NSButton *refreshButton;
+@property(nonatomic, strong) NSButton *applyButton;
+@property(nonatomic, strong) NSDictionary<NSString *, NSControl *> *inputs;
+@property(nonatomic, strong) NSDictionary<NSString *, NSTextField *> *labels;
+@end
+
+@implementation PVFlutterLayoutEditorView
+- (instancetype)initWithFrame:(NSRect)frame {
+    if (self = [super initWithFrame:frame]) {
+        self.titleLabel = [NSTextField labelWithString:@"实时布局"];
+        self.titleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+        [self addSubview:self.titleLabel];
+        self.refreshButton = [NSButton buttonWithTitle:@"刷新" target:self action:@selector(refreshClicked:)];
+        self.refreshButton.controlSize = NSControlSizeSmall;
+        [self addSubview:self.refreshButton];
+        self.statusLabel = [NSTextField wrappingLabelWithString:@""];
+        self.statusLabel.font = [NSFont systemFontOfSize:11];
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        self.statusLabel.maximumNumberOfLines = 3;
+        [self addSubview:self.statusLabel];
+        NSMutableDictionary *inputs = [NSMutableDictionary dictionary];
+        NSMutableDictionary *labels = [NSMutableDictionary dictionary];
+        NSDictionary *titles = @{@"mainAxisAlignment": @"mainAxisAlignment", @"crossAxisAlignment": @"crossAxisAlignment", @"flexFactor": @"flex", @"flexFit": @"FlexFit"};
+        for (NSString *key in [self propertyKeys]) {
+            NSTextField *label = [NSTextField labelWithString:titles[key]];
+            label.font = [NSFont systemFontOfSize:10];
+            [self addSubview:label];
+            labels[key] = label;
+            NSControl *input;
+            if ([key isEqualToString:@"flexFactor"]) {
+                NSTextField *field = [NSTextField textFieldWithString:@""];
+                field.placeholderString = @"整数 / null";
+                field.font = [NSFont systemFontOfSize:11];
+                input = field;
+            } else {
+                NSPopUpButton *menu = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+                menu.controlSize = NSControlSizeSmall;
+                menu.font = [NSFont systemFontOfSize:11];
+                menu.autoenablesItems = NO;
+                for (NSString *value in [PVFlutterLayoutEditing enumValuesForProperty:key]) {
+                    [menu addItemWithTitle:value.pathExtension];
+                    menu.lastItem.representedObject = value;
+                }
+                input = menu;
+            }
+            input.identifier = key;
+            input.target = self;
+            input.action = @selector(valueChanged:);
+            inputs[key] = input;
+            [self addSubview:input];
+        }
+        self.inputs = inputs;
+        self.labels = labels;
+        self.applyButton = [NSButton buttonWithTitle:@"应用" target:self action:@selector(applyFlex:)];
+        self.applyButton.controlSize = NSControlSizeSmall;
+        [self addSubview:self.applyButton];
+        self.values = @{};
+        self.status = @"选择支持布局修改的 Flutter 节点";
+    }
+    return self;
+}
+- (NSArray<NSString *> *)propertyKeys {
+    return @[@"mainAxisAlignment", @"crossAxisAlignment", @"flexFactor", @"flexFit"];
+}
+- (void)setValues:(NSDictionary<NSString *,NSString *> *)values {
+    _values = [values copy] ?: @{};
+    for (NSString *key in [self propertyKeys]) {
+        NSControl *input = self.inputs[key];
+        input.hidden = self.labels[key].hidden = !(_values[key] != nil);
+        if ([input isKindOfClass:NSPopUpButton.class]) {
+            NSPopUpButton *menu = (NSPopUpButton *)input;
+            for (NSMenuItem *item in menu.itemArray) {
+                item.state = NSControlStateValueOff;
+                item.enabled = ![item.representedObject isEqual:@"CrossAxisAlignment.baseline"] || _values[@"textBaseline"] != nil;
+                if ([item.representedObject isEqual:_values[key]]) [menu selectItem:item];
+            }
+        } else {
+            input.stringValue = _values[key] ?: @"";
+        }
+    }
+    self.applyButton.hidden = !(_values[@"flexFactor"] != nil);
+    [self setBusy:self.busy];
+    [self setNeedsLayout:YES];
+    if (self.heightDidChange) self.heightDidChange();
+}
+- (void)setStatus:(NSString *)status {
+    _status = [status copy];
+    self.statusLabel.stringValue = status ?: @"";
+    self.statusLabel.toolTip = status;
+    [self setNeedsLayout:YES];
+    if (self.heightDidChange) self.heightDidChange();
+}
+- (void)setBusy:(BOOL)busy {
+    _busy = busy;
+    for (NSControl *control in self.inputs.allValues) control.enabled = !busy;
+    self.applyButton.enabled = !busy;
+    self.refreshButton.enabled = !busy;
+}
+- (void)refreshClicked:(id)sender { if (self.refresh) self.refresh(); }
+- (void)applyFlex:(id)sender { [self valueChanged:self.inputs[@"flexFactor"]]; }
+- (void)valueChanged:(NSControl *)sender {
+    NSString *value = [sender isKindOfClass:NSPopUpButton.class]
+        ? ((NSPopUpButton *)sender).selectedItem.representedObject : sender.stringValue;
+    if (self.changeValue) self.changeValue(sender.identifier, value);
+}
+- (CGFloat)fieldsBottom {
+    CGFloat y = 30;
+    for (NSString *key in [self propertyKeys]) if (!self.inputs[key].hidden) y += 30;
+    return y;
+}
+- (void)layout {
+    [super layout];
+    CGFloat width = NSWidth(self.bounds);
+    self.titleLabel.frame = NSMakeRect(0, 4, MAX(0, width - 60), 20);
+    self.refreshButton.frame = NSMakeRect(MAX(0, width - 54), 0, 54, 26);
+    CGFloat y = 30;
+    for (NSString *key in [self propertyKeys]) {
+        NSControl *input = self.inputs[key];
+        if (input.hidden) continue;
+        self.labels[key].frame = NSMakeRect(0, y + 5, 106, 18);
+        CGFloat inputWidth = MAX(0, width - 110);
+        if ([key isEqualToString:@"flexFactor"]) {
+            input.frame = NSMakeRect(110, y + 2, MAX(0, inputWidth - 45), 24);
+            self.applyButton.frame = NSMakeRect(width - 43, y, 43, 26);
+        } else input.frame = NSMakeRect(110, y, inputWidth, 26);
+        y += 30;
+    }
+    CGFloat labelHeight = MIN(42, ceil([self.statusLabel sizeThatFits:NSMakeSize(width, CGFLOAT_MAX)].height));
+    self.statusLabel.frame = NSMakeRect(0, y + 2, width, labelHeight);
+}
+- (NSSize)sizeThatFits:(NSSize)size {
+    CGFloat labelHeight = MIN(42, ceil([self.statusLabel sizeThatFits:NSMakeSize(size.width, CGFLOAT_MAX)].height));
+    return NSMakeSize(size.width, [self fieldsBottom] + labelHeight + 10);
+}
+@end
+
 @interface PVDetailFlutterViewController ()
 @property(nonatomic, strong) PVFlutterInspectorHeaderView *headerView;
 @property(nonatomic, strong) PVFlutterInspectorTabBar *domainControl;
 @property(nonatomic, strong) NSButton *previewVisibilityButton;
+@property(nonatomic, strong) PVFlutterLayoutEditorView *layoutEditor;
+@property(nonatomic) NSUInteger layoutRequestGeneration;
 @property(nonatomic, strong) RACDisposable *previewVisibilitySubscription;
 @property(nonatomic, strong) NSScrollView *scrollView;
 @property(nonatomic, strong) PVDetailBaseView *documentView;
@@ -1631,6 +1783,14 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 
     self.documentView = [PVDetailBaseView new];
     [self.documentView addSubview:self.headerView];
+    self.layoutEditor = [PVFlutterLayoutEditorView new];
+    self.layoutEditor.hidden = YES;
+    self.layoutEditor.refresh = ^{ [weakSelf refreshLayoutEditor]; };
+    self.layoutEditor.changeValue = ^(NSString *property, NSString *value) {
+        [weakSelf applyLayoutProperty:property value:value];
+    };
+    self.layoutEditor.heightDidChange = ^{ [weakSelf layoutPanel]; };
+    [self.documentView addSubview:self.layoutEditor];
     self.scrollView = [NSScrollView new];
     self.scrollView.hasVerticalScroller = YES;
     self.scrollView.hasHorizontalScroller = NO;
@@ -1658,6 +1818,7 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
         [self updatePreviewVisibilityButton];
     }];
     [self updatePreviewVisibilityButton];
+    [self refreshLayoutEditor];
 }
 
 - (void)updatePreviewVisibilityButton {
@@ -1681,6 +1842,99 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     [self.dataSource.itemDidChangeNoPreview sendNext:nil];
 }
 
+- (NSDictionary *)layoutRequestForItem:(PVDisplayItem *)item operation:(NSString *)operation parameters:(NSDictionary *)parameters {
+    PVFlutterNodeReference *reference = item.flutterReference ?: item.flutterDetail.reference;
+    return @{@"displayItemID": item.objectID ?: @"", @"objectGroup": reference.objectGroup ?: @"",
+             @"operation": operation, @"parameters": parameters};
+}
+
+- (void)refreshLayoutEditor {
+    NSUInteger generation = ++self.layoutRequestGeneration;
+    self.layoutEditor.hidden = !self.displayItem.pv_isFlutterItem;
+    self.layoutEditor.values = @{};
+    self.layoutEditor.busy = NO;
+    if (self.layoutEditor.hidden) return;
+    PVDetailInspectableApp *app = PVDetailAppsManager.sharedInstance.inspectingApp;
+    if (![self.dataSource isKindOfClass:PVDetailStaticHierarchyDataSource.class]) {
+        self.layoutEditor.status = @"保存的快照仅供查看，连接 App 后可修改布局。";
+        return;
+    }
+    if (!app) { self.layoutEditor.status = @"请先连接 Flutter App。"; return; }
+    self.layoutEditor.busy = YES;
+    self.layoutEditor.status = @"正在读取可编辑布局…";
+    NSDictionary *request = [self layoutRequestForItem:self.displayItem operation:@"getLayoutExplorerNode" parameters:@{}];
+    @weakify(self);
+    [[[app performFlutterLayoutRequest:request] deliverOnMainThread] subscribeNext:^(NSDictionary *node) {
+        @strongify(self);
+        if (!self || generation != self.layoutRequestGeneration || app != PVDetailAppsManager.sharedInstance.inspectingApp) return;
+        self.layoutEditor.values = [PVFlutterLayoutEditing valuesFromLayoutNode:node];
+        self.layoutEditor.busy = NO;
+        self.layoutEditor.status = self.layoutEditor.values.count
+            ? @"修改在 App 中临时生效；热重载或重建可能恢复。"
+            : @"此节点没有官方支持的可编辑布局属性。";
+    } error:^(NSError *error) {
+        @strongify(self);
+        if (!self || generation != self.layoutRequestGeneration) return;
+        self.layoutEditor.busy = NO;
+        self.layoutEditor.status = [@"无法读取布局：" stringByAppendingString:error.localizedDescription ?: @""];
+    }];
+}
+
+- (void)applyLayoutProperty:(NSString *)property value:(NSString *)value {
+    if (self.layoutEditor.busy) return;
+    NSError *error;
+    NSDictionary *operation = [PVFlutterLayoutEditing operationForProperty:property value:value
+                                                           currentValues:self.layoutEditor.values error:&error];
+    if (!operation) {
+        self.layoutEditor.values = self.layoutEditor.values;
+        self.layoutEditor.status = error.localizedDescription;
+        return;
+    }
+    PVDetailInspectableApp *app = PVDetailAppsManager.sharedInstance.inspectingApp;
+    if (!app || ![self.dataSource isKindOfClass:PVDetailStaticHierarchyDataSource.class]) {
+        [self refreshLayoutEditor]; return;
+    }
+    PVDisplayItem *item = self.displayItem;
+    PVDetailStaticHierarchyDataSource *dataSource = (id)self.dataSource;
+    NSUInteger generation = ++self.layoutRequestGeneration;
+    NSDictionary *request = [self layoutRequestForItem:item operation:operation[@"operation"] parameters:operation[@"parameters"]];
+    self.layoutEditor.busy = YES;
+    self.layoutEditor.status = @"正在应用到 App…";
+    @weakify(self);
+    [[[app performFlutterLayoutRequest:request] deliverOnMainThread] subscribeNext:^(NSDictionary *node) {
+        @strongify(self);
+        if (!self || app != PVDetailAppsManager.sharedInstance.inspectingApp) return;
+        if (generation == self.layoutRequestGeneration) {
+            self.layoutEditor.values = [PVFlutterLayoutEditing valuesFromLayoutNode:node];
+            self.layoutEditor.status = @"已应用，正在刷新预览…";
+        }
+        // Layout can move siblings and ancestors, so refresh the complete tree
+        // and screenshots rather than updating only the selected node's image.
+        [[PVDetailStaticAsyncUpdateManager sharedInstance] endUpdating];
+        [[[app fetchHierarchyData] deliverOnMainThread] subscribeNext:^(PVHierarchyInfo *info) {
+            @strongify(self);
+            if (app != PVDetailAppsManager.sharedInstance.inspectingApp) return;
+            [dataSource reloadWithHierarchyInfo:info keepState:YES];
+            if (dataSource.preferenceManager.fastMode.currentBOOLValue) [[PVDetailStaticAsyncUpdateManager sharedInstance] updateAll];
+            if (generation == self.layoutRequestGeneration) {
+                self.layoutEditor.busy = NO;
+                self.layoutEditor.status = @"已应用到 App，预览已刷新。";
+            }
+        } error:^(NSError *refreshError) {
+            @strongify(self);
+            if (generation != self.layoutRequestGeneration) return;
+            self.layoutEditor.busy = NO;
+            self.layoutEditor.status = [@"修改已生效，预览刷新失败：" stringByAppendingString:refreshError.localizedDescription ?: @""];
+        }];
+    } error:^(NSError *rpcError) {
+        @strongify(self);
+        if (!self || generation != self.layoutRequestGeneration) return;
+        self.layoutEditor.values = self.layoutEditor.values;
+        self.layoutEditor.busy = NO;
+        self.layoutEditor.status = [@"修改失败：" stringByAppendingString:rpcError.localizedDescription ?: @""];
+    }];
+}
+
 - (void)setDetail:(PVFlutterNodeDetail *)detail {
     NSString *signature = [self presentationSignatureForItem:self.displayItem detail:detail];
     if (_detail == detail && [self.detailSignature isEqualToString:signature]) return;
@@ -1692,6 +1946,7 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 - (void)setDisplayItem:(PVDisplayItem *)displayItem {
     BOOL sameItem = _displayItem == displayItem;
     _displayItem = displayItem;
+    if (!sameItem) [self refreshLayoutEditor];
     [self updatePreviewVisibilityButton];
     PVFlutterNodeDetail *detail = displayItem.flutterDetail;
     NSString *signature = [self presentationSignatureForItem:displayItem detail:detail];
@@ -1707,6 +1962,12 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self reloadDetail];
+    @weakify(self);
+    [[[[RACObserve(PVDetailAppsManager.sharedInstance, inspectingApp) skip:1] deliverOnMainThread]
+        takeUntil:self.rac_willDeallocSignal] subscribeNext:^(id app) {
+        @strongify(self);
+        [self refreshLayoutEditor];
+    }];
 }
 
 - (void)viewDidLayout {
@@ -1721,10 +1982,10 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     }
     PVDisplayItem *item = self.displayItem;
     BOOL hasDetail = item.pv_isFlutterItem && (self.detail || item.flutterDetail);
-    self.emptyLabel.hidden = hasDetail;
+    self.emptyLabel.hidden = hasDetail || !self.layoutEditor.hidden;
     self.headerView.hidden = !hasDetail;
     self.domainControl.hidden = !hasDetail;
-    self.scrollView.hidden = !hasDetail;
+    self.scrollView.hidden = !hasDetail && self.layoutEditor.hidden;
     if (!hasDetail) {
         self.presentation = nil;
         [self reloadSelectedDomainResetScroll:NO];
@@ -1820,7 +2081,7 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
             MAX(0, width - PVFlutterPanelInset * 2), 24);
         scrollY = NSMaxY(self.previewVisibilityButton.frame) + 9;
     }
-    if (self.headerView.hidden) {
+    if (self.headerView.hidden && self.layoutEditor.hidden) {
         self.emptyLabel.frame = NSMakeRect(24, scrollY + 10, MAX(0, width - 48),
             MAX(0, height - scrollY - 24));
         return;
@@ -1830,7 +2091,12 @@ typedef NS_ENUM(NSUInteger, PVFlutterInspectorFieldStyle) {
     CGFloat documentWidth = MAX(0, NSWidth(self.scrollView.contentView.bounds));
     CGFloat sectionWidth = MAX(120, documentWidth - PVFlutterPanelInset * 2);
     CGFloat y = 10;
-    CGFloat headerHeight = [self.headerView sizeThatFits:NSMakeSize(sectionWidth, CGFLOAT_MAX)].height;
+    if (!self.layoutEditor.hidden) {
+        CGFloat editorHeight = [self.layoutEditor sizeThatFits:NSMakeSize(sectionWidth, CGFLOAT_MAX)].height;
+        self.layoutEditor.frame = NSMakeRect(PVFlutterPanelInset, y, sectionWidth, editorHeight);
+        y = NSMaxY(self.layoutEditor.frame) + PVFlutterSectionSpacing;
+    }
+    CGFloat headerHeight = self.headerView.hidden ? 0 : [self.headerView sizeThatFits:NSMakeSize(sectionWidth, CGFLOAT_MAX)].height;
     self.headerView.frame = NSMakeRect(PVFlutterPanelInset, y, sectionWidth, headerHeight);
     y = NSMaxY(self.headerView.frame) + PVFlutterSectionSpacing;
     for (PVFlutterInspectorSectionView *view in self.sectionViews) {

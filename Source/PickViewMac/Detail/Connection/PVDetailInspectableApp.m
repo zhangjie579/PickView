@@ -68,6 +68,10 @@ static NSError *PVDetailUnsupportedCapabilityError(void) {
                  timeoutInterval:8];
 }
 
+- (RACSignal *)performFlutterLayoutRequest:(NSDictionary *)request {
+    return [self requestWithType:PVRequestTypeFlutterLayout object:(id<NSSecureCoding>)request timeoutInterval:15];
+}
+
 - (RACSignal *)submitInbuiltModification:(PVAttributeModification *)modification {
     if (![self supportsCapability:PVPeerCapabilityAttributeModification]) {
         return [RACSignal error:PVDetailUnsupportedCapabilityError()];
