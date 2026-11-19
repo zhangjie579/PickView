@@ -72,6 +72,8 @@ static NSString *KKFIPointDescription(CGPoint point) {
         [self directOffsetsForTargetObjectIDs:offsetBridgeTargetObjectIDs
                                 inLayoutValue:layoutPayload];
     __block NSUInteger remaining = objectIDs.count;
+    NSMutableDictionary<NSString *, NSDictionary *> *layoutNodesByID = [NSMutableDictionary dictionary];
+    [self indexLayoutNodes:layoutPayload byObjectID:layoutNodesByID];
     for (NSString *objectID in objectIDs) {
         BOOL isCard = [cardObjectIDs containsObject:objectID];
         BOOL isContainer = [containerObjectIDs containsObject:objectID];
@@ -118,6 +120,9 @@ static NSString *KKFIPointDescription(CGPoint point) {
                 completion:^(NSDictionary *response, NSError *error) {
             if (error == nil) {
                 id payload = [KKFIInspectorJSON normalizedPayloadFromResponse:response];
+                if (needsDetailsSubtree && [payload isKindOfClass:NSDictionary.class]) {
+                    payload = [self detailsByAddingLayoutRenderObjects:payload layoutNodesByID:layoutNodesByID];
+                }
                 NSArray *properties = nil;
                 if (isOffsetBridgeRoot) {
                     NSDictionary<NSString *, NSValue *> *offsets =
@@ -136,6 +141,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
                     NSDictionary<NSString *, NSValue *> *offsets =
                         [self singleChildScrollResolvedOffsetsForTargetObjectIDs:
                             scrollViewChildObjectIDs
+                                                           rootRenderObjectID:offsetBridgeRenderObjectIDsByID[objectID]
                                                                   detailsPayload:payload
                                                                     layoutValue:layoutPayload];
                     [resolvedOffsetsByID addEntriesFromDictionary:offsets];
@@ -203,6 +209,41 @@ static NSString *KKFIPointDescription(CGPoint point) {
             }
         }];
     }
+}
+
+// getDetailsSubtree omits renderObject on logical/business Widgets, whereas
+// Layout Explorer resolves their actual RenderObject. Restore that identity
+// and parentData before walking slivers: otherwise a SliverToBoxAdapter child
+// loses its -scrollOffset paint translation until a deeper implementation node,
+// where it can no longer be associated with the public target above it.
+- (void)indexLayoutNodes:(NSDictionary *)node byObjectID:(NSMutableDictionary *)nodesByID {
+    NSString *objectID = [KKFIInspectorJSON nodeIDFromDictionary:node];
+    if (objectID.length) nodesByID[objectID] = node;
+    NSArray *children = [node[@"children"] isKindOfClass:NSArray.class] ? node[@"children"] : @[];
+    for (id child in children) {
+        if ([child isKindOfClass:NSDictionary.class]) [self indexLayoutNodes:child byObjectID:nodesByID];
+    }
+}
+
+- (NSDictionary *)detailsByAddingLayoutRenderObjects:(NSDictionary *)node
+                                      layoutNodesByID:(NSDictionary<NSString *, NSDictionary *> *)layoutNodesByID {
+    NSMutableDictionary *result = [node mutableCopy];
+    NSString *objectID = [KKFIInspectorJSON nodeIDFromDictionary:node];
+    NSDictionary *layoutNode = objectID.length ? layoutNodesByID[objectID] : nil;
+    if (![self renderObjectPropertyFromInspectorNode:node] && layoutNode) {
+        NSDictionary *renderObject = [self renderObjectPropertyFromInspectorNode:layoutNode];
+        if (renderObject) result[@"renderObject"] = renderObject;
+    }
+    NSArray *children = [node[@"children"] isKindOfClass:NSArray.class] ? node[@"children"] : nil;
+    if (children) {
+        NSMutableArray *enriched = [NSMutableArray arrayWithCapacity:children.count];
+        for (id child in children) {
+            [enriched addObject:[child isKindOfClass:NSDictionary.class]
+                ? [self detailsByAddingLayoutRenderObjects:child layoutNodesByID:layoutNodesByID] : child];
+        }
+        result[@"children"] = enriched;
+    }
+    return result.copy;
 }
 
 - (NSDictionary<NSString *, NSValue *> *)
@@ -398,6 +439,14 @@ static NSString *KKFIPointDescription(CGPoint point) {
                     [objectIDs addObject:objectID];
                     [singleChildScrollViewObjectIDs addObject:objectID];
                     scrollViewChildObjectIDsByID[objectID] = childObjectIDs.copy;
+                    // The details root may omit renderObject while an internal
+                    // RepaintBoundary exposes this same viewport RenderObject.
+                    // Remember its identity from Layout Explorer so its outer
+                    // parentData offset is not counted as an internal bridge.
+                    NSDictionary *renderObject = [self renderObjectPropertyFromInspectorNode:node];
+                    NSString *renderObjectID = [renderObject[@"valueId"] isKindOfClass:NSString.class]
+                        ? renderObject[@"valueId"] : nil;
+                    if (renderObjectID.length) offsetBridgeRenderObjectIDsByID[objectID] = renderObjectID;
                 }
             } else if (isOffsetBridgeRoot) {
                 NSMutableSet<NSString *> *childObjectIDs = [NSMutableSet set];
@@ -692,6 +741,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
 /// inset is the only piece the Layout Explorer payload exposes.
 - (NSDictionary<NSString *, NSValue *> *)
     singleChildScrollResolvedOffsetsForTargetObjectIDs:(NSSet<NSString *> *)targetObjectIDs
+                                    rootRenderObjectID:(NSString *)rootRenderObjectID
                                         detailsPayload:(id)payload
                                           layoutValue:(id)layoutValue {
     if (![payload isKindOfClass:NSDictionary.class] ||
@@ -721,7 +771,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
     // viewport's paint translation.
     NSDictionary<NSString *, NSValue *> *bridgedOffsets =
         [self resolvedOffsetsForTargetObjectIDs:targetObjectIDs
-                             rootRenderObjectID:nil
+                             rootRenderObjectID:rootRenderObjectID
                                  detailsPayload:payload
                             targetLocalOffsets:localOffsets];
     NSMutableDictionary<NSString *, NSValue *> *result =
@@ -982,7 +1032,7 @@ static NSString *KKFIPointDescription(CGPoint point) {
             canResolveReverseAxis = foundChildSize &&
                 isfinite(nextSliverPaintExtent);
         }
-        if (foundLayoutOffset &&
+        if (foundLayoutOffset && !renderObjectAlreadySeen &&
             (isForwardAxis || (isReverseAxis && canResolveReverseAxis))) {
             BOOL foundCrossAxisOffset = NO;
             CGFloat crossAxisOffset =
